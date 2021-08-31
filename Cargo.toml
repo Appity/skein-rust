@@ -1,0 +1,26 @@
+[package]
+name = "skein-rpc"
+version = "0.1.0"
+authors = [ "Scott Tadman <tadman@postageapp.com>" ]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = "*"
+amq-protocol-types = "*"
+chrono = { version = "*", features = [ "serde" ] }
+futures = { version = "0.3.17", features = [ "thread-pool" ] }
+gethostname = "*"
+hyper = "*"
+hyper-tls = "*"
+lapin = { version = "1.7.1" }
+lazy_static = "*"
+log = { version = "*" }
+serde = { version = "*", features = [ "derive" ] }
+serde_json = { version = "*", features = [ "preserve_order" ] }
+simple_logger = { version = "*" }
+tokio = { version = "1.10.1", features = [ "full" ] }
+time = "*"
+uuid = { version = "*", features = [ "serde", "v4" ] }
+url = "2.2.2"
