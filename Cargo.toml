@@ -26,3 +26,11 @@ tokio = { version = "1.10.1", features = [ "full" ] }
 time = "*"
 uuid = { version = "*", features = [ "serde", "v4" ] }
 url = "2.2.2"
+
+[[bin]]
+name = "amqp-worker"
+path = "src/bin/amqp-worker.rs"
+
+[[bin]]
+name = "amqp-client"
+path = "src/bin/amqp-client.rs"
