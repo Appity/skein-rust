@@ -126,8 +126,8 @@ impl<C> Worker<C> where C : Responder {
                                         match serde_json::from_str::<rpc::Request>(s) {
                                             Ok(request) => {
                                                 match self.context.respond(&request).await {
-                                                    Ok(reply) => {
-                                                        let response = rpc::Response::to(&request, reply);
+                                                    Ok(result) => {
+                                                        let response = rpc::Response::result_for(&request, result);
                                                     },
                                                     Err(err) => {
                                                         log::warn!("Error: Internal processing error {:?}", err);
