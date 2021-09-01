@@ -40,10 +40,7 @@ impl Responder for WorkerContext {
     async fn respond(&mut self, request: &rpc::Request) -> Result<Value,Box<dyn Error>> {
         match request.method().as_str() {
             "echo" => {
-                match request.params() {
-                    Some(v) => Ok(v.clone()),
-                    None => Ok(json!(null))
-                }
+                Ok(request.params().map(|p| p.clone()).unwrap_or(json!(null)))
             },
             _ => {
                 Err(Box::new(rpc::ErrorResponse::new(-32601, "Method not found", None)))
