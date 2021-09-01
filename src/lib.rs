@@ -4,6 +4,8 @@ extern crate tokio;
 mod client;
 pub use client::Client;
 
+pub mod rpc;
+
 mod responder;
 pub use responder::Responder;
 
