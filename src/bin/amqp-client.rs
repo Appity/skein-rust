@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let options = AMQPClientOptions::new(
         amqp_url, queue, "amqp-client"
-    );
+    ).with_timeout(program.timeout);
 
     let client = AMQPClient::new(options).await?;
     let method = program.method.unwrap_or("echo".to_string());
@@ -64,11 +64,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let now = Instant::now();
 
     for _ in 0..program.repeat {
-        let response = client.rpc_request(method.as_str(), params.clone()).await?;
-
-        if program.verbose {
-            println!("{:?}", response);
+        match client.rpc_request(method.as_str(), params.clone()).await {
+            Ok(response) => {
+                if program.verbose {
+                    println!("{:?}", response);
+                }
+            }
+            Err(err) => {
+                log::error!("Error: {}", err);
+            }
         }
+
     }
 
     let elapsed = now.elapsed().as_secs_f64();
