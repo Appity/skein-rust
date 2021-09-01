@@ -8,5 +8,9 @@ use super::rpc;
 
 #[async_trait]
 pub trait Responder : Send + Sized + Sync + 'static {
-    async fn respond(&self, request: &rpc::Request) -> Result<Value,Box<dyn Error>>;
+    async fn respond(&mut self, request: &rpc::Request) -> Result<Value,Box<dyn Error>>;
+
+    fn terminated(&self) -> bool {
+        false
+    }
 }

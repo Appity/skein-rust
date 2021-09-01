@@ -62,7 +62,7 @@ impl<C> Worker<C> where C : Responder {
         self.queue_name.as_str()
     }
 
-    pub fn run<R>(self) -> JoinHandle<LapinResult<Self>> where R : Responder {
+    pub fn run(mut self) -> JoinHandle<LapinResult<Self>> {
         tokio::spawn(async move {
             let channel = self.channel.clone();
             let queue_name = self.queue_name.clone();
@@ -90,31 +90,44 @@ impl<C> Worker<C> where C : Responder {
                         }
                     }
                 );
+
+                if self.context.terminated() {
+                    break;
+                }
             }
 
             Ok(self)
         })
     }
 
-    async fn try_reply_to(&self, channel: &Channel, delivery: &Delivery, reply: Value) {
+    async fn try_reply_to(&self, channel: &Channel, delivery: &Delivery, response: &rpc::Response) {
         if let Some(reply_to) = delivery.properties.reply_to() {
             let reply_to = reply_to.as_str();
 
             if reply_to.len() > 0 {
-                let payload = reply.to_string().as_bytes().to_vec();
+                match serde_json::to_string(response) {
+                    Ok(str) => {
+                        let payload = str.as_bytes().to_vec();
 
-                channel.basic_publish(
-                    "",
-                    reply_to,
-                    Default::default(),
-                    payload,
-                    BasicProperties::default().with_content_type(ShortString::from("application/json"))
-                ).await.ok();
+                        channel.basic_publish(
+                            "",
+                            reply_to,
+                            Default::default(),
+                            payload,
+                            BasicProperties::default().with_content_type(ShortString::from("application/json"))
+                        ).await.ok();
+
+                        // FIX: Warn on transmission error
+                    },
+                    Err(err) => {
+                        log::warn!("Error: Internal processing error {:?}", err);
+                    }
+                }
             }
         }
     }
 
-    async fn handle_rpc_delivery(&self, channel: &Channel, delivery: &Delivery) {
+    async fn handle_rpc_delivery(&mut self, channel: &Channel, delivery: &Delivery) {
         match std::str::from_utf8(&delivery.data) {
             Ok(s) => {
                 match serde_json::from_str::<Value>(s) {
@@ -125,14 +138,21 @@ impl<C> Worker<C> where C : Responder {
                                     "2.0" => {
                                         match serde_json::from_str::<rpc::Request>(s) {
                                             Ok(request) => {
-                                                match self.context.respond(&request).await {
+                                                // NOTE: Have to avoid holding the Response open,
+                                                //       so a little dance is required.
+                                                let response = match self.context.respond(&request).await {
                                                     Ok(result) => {
-                                                        let response = rpc::Response::result_for(&request, result);
+                                                        rpc::Response::result_for(&request, result)
                                                     },
                                                     Err(err) => {
                                                         log::warn!("Error: Internal processing error {:?}", err);
+
+                                                        rpc::Response::error_for(&request, -32603, "Internal processing error", None)
                                                     }
-                                                }
+                                                };
+
+                                                self.try_reply_to(channel, delivery, &response).await;
+
                                             },
                                             Err(err) => {
                                                 log::warn!("Error: JSON-RPC deserialization error {:?}", err);
@@ -171,38 +191,46 @@ impl<C> Worker<C> where C : Responder {
 
 #[cfg(test)]
 mod test {
-    // use std::env;
+    use std::env;
 
-    // use async_trait::async_trait;
-    // use serde_json::json;
+    use async_trait::async_trait;
+    use serde_json::json;
 
-    // use super::*;
+    use super::*;
 
-    // struct ContextExample {
-    //     id: u32
-    // }
+    struct ContextExample {
+        id: u32,
+        terminated: bool
+    }
 
-    // #[async_trait]
-    // impl Responder for ContextExample {
-    //     async fn respond(&self, id: &str, method: &str, params: &Value) -> Result<Value,ResponderError> {
-    //         Ok(json!("Example"))
-    //     }
-    // }
+    #[async_trait]
+    impl Responder for ContextExample {
+        async fn respond(&mut self, _request: &rpc::Request) -> Result<Value,Box<dyn std::error::Error>> {
+            self.terminated = true;
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads=2)]
-    // async fn test_new() {
-    //     let context = ContextExample {
-    //         id: 1
-    //     };
+            Ok(json!(format!("Example {}", &self.id)))
+        }
 
-    //     // /context: C, amqp_addr: S, queue_name: S)
+        fn terminated(&self) -> bool {
+            self.terminated
+        }
+    }
 
-    //     let worker = Worker::new(
-    //         context,
-    //         env::var("AMQP_URL").unwrap_or("amqp://localhost:5672/%2f".to_string()),
-    //         "test"
-    //     ).await.unwrap();
+    #[tokio::test(flavor = "multi_thread", worker_threads=2)]
+    async fn test_new() {
+        let context = ContextExample {
+            id: 1,
+            terminated: false
+        };
 
-    //     worker.run::<ResponderExample>().await.ok();
-    // }
+        // /context: C, amqp_addr: S, queue_name: S)
+
+        let worker = Worker::new(
+            context,
+            env::var("AMQP_URL").unwrap_or("amqp://localhost:5672/%2f".to_string()),
+            "test"
+        ).await.unwrap();
+
+        worker.run().abort();
+    }
 }
