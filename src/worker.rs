@@ -1,5 +1,6 @@
 use futures::future::FutureExt;
 use futures::stream::StreamExt;
+use std::convert::TryFrom;
 use std::sync::Arc;
 
 use amq_protocol_types::ShortString;
@@ -133,78 +134,20 @@ impl<C> Worker<C> where C : Responder {
     }
 
     async fn handle_rpc_delivery(&mut self, delivery: &Delivery) -> rpc::Response {
-        match std::str::from_utf8(&delivery.data) {
-            Ok(s) => {
-                match serde_json::from_str::<Value>(s) {
-                    Ok(v) => {
-                        match &v["jsonrpc"] {
-                            Value::String(ver) => {
-                                match ver.as_str() {
-                                    "2.0" => {
-                                        match serde_json::from_str::<rpc::Request>(s) {
-                                            Ok(request) => {
-                                                // NOTE: References to the response need to be dropped
-                                                //       prior to sending the reply.
-                                                match self.context.respond(&request).await {
-                                                    Ok(result) => {
-                                                        rpc::Response::result_for(&request, result)
-                                                    },
-                                                    Err(err) => {
-                                                        log::warn!("Error: Internal processing error {:?}", err);
-
-                                                        rpc::Response::error_for(&request, -32603, "Internal processing error", None)
-                                                    }
-                                                }
-                                            },
-                                            Err(err) => {
-                                                log::warn!("Error: JSON-RPC deserialization error {:?}", err);
-
-                                                rpc::Response::new_error_without_id(
-                                                    rpc::ErrorResponse::new(-32700, "Parse error, invalid JSON", None)
-                                                )
-                                            }
-                                        }
-                                    },
-                                    ver => {
-                                        log::warn!("Error: Mismatched JSON-RPC version {:?}", ver);
-
-                                        rpc::Response::new_error_without_id(
-                                            rpc::ErrorResponse::new(-32600, "Invalid JSON-RPC version number", None)
-                                        )
-                                    }
-                                }
-                            },
-                            Value::Null => {
-                                log::warn!("Error: \"jsonrpc\" attribute missing");
-                                rpc::Response::new_error_without_id(
-                                    rpc::ErrorResponse::new(-32600, "Missing JSON-RPC version", None)
-                                )
-                            },
-                            _ => {
-                                log::warn!("Error: \"jsonrpc\" attribute is not a string");
-
-                                rpc::Response::new_error_without_id(
-                                    rpc::ErrorResponse::new(-32603, "Non-string JSON-RPC version field", None)
-                                )
-                            }
-                        }
+        match rpc::Request::try_from(delivery) {
+            Ok(request) => {
+                match self.context.respond(&request).await {
+                    Ok(result) => {
+                        rpc::Response::result_for(&request, result)
                     },
-                    Err(e) => {
-                        log::warn!("Error: Invalid JSON in message ({})", e);
+                    Err(err) => {
+                        log::warn!("Error: Internal processing error {:?}", err);
 
-                        rpc::Response::new_error_without_id(
-                            rpc::ErrorResponse::new(-32700, "Parse error, invalid JSON", None)
-                        )
+                        rpc::Response::error_for(&request, -32603, "Internal processing error", None)
                     }
                 }
             },
-            Err(e) => {
-                log::warn!("Error: Invalid UTF-8 in message ({})", e);
-
-                rpc::Response::new_error_without_id(
-                    rpc::ErrorResponse::new(-32603, "Internal processing error", None)
-                )
-            }
+            Err(response) => response
         }
     }
 }

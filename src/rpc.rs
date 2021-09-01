@@ -291,6 +291,13 @@ impl Response {
         }
     }
 
+    pub fn new_result_serialize(id: impl ToString, result: impl Into<Value>) -> Self {
+        Self::Result {
+            id: id.to_string(),
+            result: result.into()
+        }
+    }
+
     pub fn new_error(id: impl ToString, error: ErrorResponse) -> Self {
         Self::Error {
             id: Some(id.to_string()),

@@ -1,8 +1,7 @@
 use futures::future::FutureExt;
 use futures::stream::StreamExt;
 use std::collections::HashMap;
-use std::fmt::{self,Display};
-use std::sync::Arc;
+use std::convert::TryFrom;
 
 use amq_protocol_types::ShortString;
 use gethostname::gethostname;
@@ -79,36 +78,99 @@ impl Client {
             FieldTable::default()
         ).await?;
 
-        let (tx, mut rx) = unbounded_channel();
+        let (tx, mut rx) = unbounded_channel::<(rpc::Request, Sender<rpc::Response>)>();
+
+        let rpc_queue_name = queue_name.clone();
 
         let handle = tokio::spawn(async move {
-            // let mut requests = HashMap::new();
+            let rpc_queue_name = rpc_queue_name.as_str();
+            let properties = BasicProperties::default().with_content_type(ShortString::from("application/json"));
+            let mut requests = HashMap::new();
 
-            tokio::select!(
-                r = rx.recv() => {
+            loop {
+                tokio::select!(
+                    r = rx.recv() => {
+                        match r {
+                            Some((request,reply)) => {
+                                match serde_json::to_string(&request) {
+                                    Ok(str) => {
+                                        let payload = str.as_bytes().to_vec();
 
-                },
-                incoming = consumer.next() => {
-                    match incoming {
-                        Some(Ok((channel, delivery))) => {
-                            // let response = handle_rpc_delivery(&delivery).await;
+                                        match channel.basic_publish(
+                                            "", // FUTURE: Allow specifying exchange
+                                            rpc_queue_name,
+                                            Default::default(),
+                                            payload,
+                                            properties.clone()
+                                        ).await {
+                                            Ok(_) => {
+                                                requests.insert(request.id().clone(), (request,reply));
+                                            },
+                                            Err(err) => {
+                                                reply.send(
+                                                    rpc::Response::error_for(
+                                                        &request,
+                                                        -32603,
+                                                        format!("Could not send request: {}", err),
+                                                        None
+                                                    )
+                                                ).await.ok();
+                                            }
+                                        }
+                                    },
+                                    Err(err) => {
+                                        log::error!("Error serializing request: {}", err);
+                                    }
+                                }
+                            },
+                            None => break
+                        }
+                    },
+                    incoming = consumer.next() => {
+                        match incoming {
+                            Some(Ok((_channel, delivery))) => {
+                                match rpc::Response::try_from(&delivery) {
+                                    Ok(response) => {
+                                        match response.id() {
+                                            Some(id) => {
+                                                match requests.remove(id) {
+                                                    Some((_,reply)) => {
+                                                        reply.send(response).await.ok();
+                                                    },
+                                                    None => {
+                                                        // Unknown request.
+                                                        log::warn!("Warning: Received response for unknown request {}", id);
+                                                    }
+                                                }
+                                            },
+                                            None => {
+                                                log::error!("Error: {:?}", response);
+                                            }
+                                        }
+                                    },
+                                    Err(err) => {
+                                        log::error!("Error: {:?}", err);
+                                    }
+                                }
+                                // let response = handle_rpc_delivery(&delivery).await;
 
-                            // self.try_reply_to(&channel, &delivery, &response).await;
+                                // self.try_reply_to(&channel, &delivery, &response).await;
 
-                            // channel.basic_ack(
-                            //     delivery.delivery_tag,
-                            //     BasicAckOptions::default()
-                            // ).map(|_| ()).await;
-                        },
-                        Some(Err(err)) => {
-                            log::error!("Error: {:?}", err);
-                        },
-                        None => {
-                            // break;
+                                // channel.basic_ack(
+                                //     delivery.delivery_tag,
+                                //     BasicAckOptions::default()
+                                // ).map(|_| ()).await;
+                            },
+                            Some(Err(err)) => {
+                                log::error!("Error: {:?}", err);
+                            },
+                            None => {
+                                // break;
+                            }
                         }
                     }
-                }
-            )
+                )
+            }
         });
 
         Ok(
