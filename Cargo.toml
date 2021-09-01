@@ -9,6 +9,8 @@ edition = "2018"
 [dependencies]
 async-trait = "*"
 amq-protocol-types = "*"
+clap = "=3.0.0-beta.2"
+clap_derive = "=3.0.0-beta.2"
 chrono = { version = "*", features = [ "serde" ] }
 futures = { version = "0.3.17", features = [ "thread-pool" ] }
 gethostname = "*"

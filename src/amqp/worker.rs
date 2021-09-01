@@ -17,8 +17,8 @@ use lapin::{
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use super::Responder;
-use super::rpc;
+use crate::Responder;
+use crate::rpc;
 
 pub struct Worker<C> where C : Responder {
     context: C,
@@ -131,11 +131,16 @@ impl<C> Worker<C> where C : Responder {
                 }
             }
         }
+        else {
+            log::debug!("No reply-to header for request");
+        }
     }
 
     async fn handle_rpc_delivery(&mut self, delivery: &Delivery) -> rpc::Response {
         match rpc::Request::try_from(delivery) {
             Ok(request) => {
+                log::debug!("Request: {}", request.id());
+
                 match self.context.respond(&request).await {
                     Ok(result) => {
                         rpc::Response::result_for(&request, result)

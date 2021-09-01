@@ -12,7 +12,8 @@ use serde::de::{self,Deserializer,Visitor,SeqAccess,MapAccess};
 pub struct Request {
     id : String,
     method : String,
-    params : Option<Value>
+    params : Option<Value>,
+    reply_to : bool
 }
 
 impl Request {
@@ -20,7 +21,8 @@ impl Request {
         Self {
             id: id.to_string(),
             method: method.to_string(),
-            params
+            params,
+            reply_to: true
         }
     }
 
@@ -28,7 +30,17 @@ impl Request {
         Self {
             id: id.to_string(),
             method: method.to_string(),
-            params: params.map(|p| p.into())
+            params: params.map(|p| p.into()),
+            reply_to: true
+        }
+    }
+
+    pub fn new_noreply(id: impl ToString, method: impl ToString, params: Option<Value>) -> Self {
+        Self {
+            id: id.to_string(),
+            method: method.to_string(),
+            params,
+            reply_to: false
         }
     }
 
@@ -42,6 +54,10 @@ impl Request {
 
     pub fn params(&self) -> Option<&Value> {
         self.params.as_ref()
+    }
+
+    pub fn reply_to(&self) -> bool {
+        self.reply_to
     }
 }
 
