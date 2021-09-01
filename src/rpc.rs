@@ -569,10 +569,10 @@ impl TryFrom<&Delivery> for Response {
 
 #[derive(Clone,Debug,Eq,PartialEq,Deserialize,Serialize)]
 pub struct ErrorResponse {
-    pub code : i32,
-    pub message : String,
+    code : i32,
+    message : String,
     #[serde(skip_serializing_if="Option::is_none")]
-    pub data : Option<Value>
+    data : Option<Value>
 }
 
 impl ErrorResponse {
@@ -583,6 +583,27 @@ impl ErrorResponse {
             data
         }
     }
+
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+
+    pub fn message(&self) -> &String {
+        &self.message
+    }
+
+    pub fn data(&self) -> Option<&Value> {
+        self.data.as_ref()
+    }
+}
+
+impl fmt::Display for ErrorResponse {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} ({})", &self.message, &self.code)
+    }
+}
+
+impl serde::ser::StdError for ErrorResponse {
 }
 
 #[cfg(test)]

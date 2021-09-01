@@ -2,6 +2,8 @@ use futures::future::FutureExt;
 use futures::stream::StreamExt;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::error::Error;
+use std::time::Duration;
 
 use amq_protocol_types::ShortString;
 use gethostname::gethostname;
@@ -16,16 +18,20 @@ use lapin::{
     Result as LapinResult
 };
 use serde::Serialize;
-use tokio::sync::mpsc::{channel,Sender,unbounded_channel,UnboundedSender};
+use serde_json::Value;
+use tokio::sync::mpsc::{unbounded_channel,UnboundedSender};
+use tokio::sync::oneshot::{channel as oneshot_channel,Sender as OneshotSender};
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use super::rpc;
 
 #[derive(Debug)]
 pub struct Client {
-    rpc: UnboundedSender<(rpc::Request, Sender<rpc::Response>)>,
+    rpc: UnboundedSender<(rpc::Request, OneshotSender<rpc::Response>)>,
     queue_name: String,
+    timeout: Duration,
     ident: String,
     handle: JoinHandle<()>
 }
@@ -78,14 +84,14 @@ impl Client {
             FieldTable::default()
         ).await?;
 
-        let (tx, mut rx) = unbounded_channel::<(rpc::Request, Sender<rpc::Response>)>();
+        let (tx, mut rx) = unbounded_channel::<(rpc::Request, OneshotSender<rpc::Response>)>();
 
         let rpc_queue_name = queue_name.clone();
 
         let handle = tokio::spawn(async move {
             let rpc_queue_name = rpc_queue_name.as_str();
             let properties = BasicProperties::default().with_content_type(ShortString::from("application/json"));
-            let mut requests = HashMap::new();
+            let mut requests = HashMap::<String,(rpc::Request,OneshotSender<rpc::Response>)>::new();
 
             loop {
                 tokio::select!(
@@ -114,7 +120,7 @@ impl Client {
                                                         format!("Could not send request: {}", err),
                                                         None
                                                     )
-                                                ).await.ok();
+                                                ).ok();
                                             }
                                         }
                                     },
@@ -128,14 +134,14 @@ impl Client {
                     },
                     incoming = consumer.next() => {
                         match incoming {
-                            Some(Ok((_channel, delivery))) => {
+                            Some(Ok((channel, delivery))) => {
                                 match rpc::Response::try_from(&delivery) {
                                     Ok(response) => {
                                         match response.id() {
                                             Some(id) => {
                                                 match requests.remove(id) {
                                                     Some((_,reply)) => {
-                                                        reply.send(response).await.ok();
+                                                        reply.send(response).ok();
                                                     },
                                                     None => {
                                                         // Unknown request.
@@ -152,14 +158,11 @@ impl Client {
                                         log::error!("Error: {:?}", err);
                                     }
                                 }
-                                // let response = handle_rpc_delivery(&delivery).await;
 
-                                // self.try_reply_to(&channel, &delivery, &response).await;
-
-                                // channel.basic_ack(
-                                //     delivery.delivery_tag,
-                                //     BasicAckOptions::default()
-                                // ).map(|_| ()).await;
+                                channel.basic_ack(
+                                    delivery.delivery_tag,
+                                    BasicAckOptions::default()
+                                ).map(|_| ()).await;
                             },
                             Some(Err(err)) => {
                                 log::error!("Error: {:?}", err);
@@ -177,6 +180,7 @@ impl Client {
             Client {
                 rpc: tx,
                 queue_name,
+                timeout: Duration::from_secs(30),
                 ident,
                 handle
             }
@@ -187,7 +191,23 @@ impl Client {
         self.handle.abort()
     }
 
-    pub fn rpc_request(method: impl ToString, params: Option<impl Serialize>) {
+    pub async fn rpc_request_serialize<T>(&self, method: impl ToString, params: Option<impl Into<Value>>) -> Result<T, Box<dyn std::error::Error>> where T : From<Value> {
+        let (tx, rx) = oneshot_channel::<rpc::Response>();
 
+        self.rpc.send(
+            (
+                rpc::Request::new_serialize(Uuid::new_v4().to_string(), method, params),
+                tx
+            )
+        ).unwrap();
+
+        match timeout(self.timeout, rx).await?? {
+            rpc::Response::Result { result, .. } => {
+                Ok(result.into())
+            },
+            rpc::Response::Error { error, .. } => {
+                Err(Box::new(error))
+            }
+        }
     }
 }
