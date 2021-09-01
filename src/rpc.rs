@@ -188,7 +188,7 @@ pub enum Response {
         result: Value
     },
     Error {
-        id: String,
+        id: Option<String>,
         error: ErrorResponse
     }
 }
@@ -203,7 +203,14 @@ impl Response {
 
     pub fn new_error(id: impl ToString, error: ErrorResponse) -> Self {
         Self::Error {
-            id: id.to_string(),
+            id: Some(id.to_string()),
+            error
+        }
+    }
+
+    pub fn new_error_without_id(error: ErrorResponse) -> Self {
+        Self::Error {
+            id: None,
             error
         }
     }
@@ -216,15 +223,15 @@ impl Response {
 
     pub fn error_for(request: &Request, code: i32, message: impl ToString, data: Option<Value>) -> Self {
         Self::Error {
-            id: request.id.clone(),
+            id: Some(request.id.clone()),
             error: ErrorResponse::new(code, message, data)
         }
     }
 
-    pub fn id(&self) -> &String {
+    pub fn id(&self) -> Option<&String> {
         match self {
-            Self::Result { id, .. } => &id,
-            Self::Error { id, .. } => &id
+            Self::Result { id, .. } => Some(&id),
+            Self::Error { id, .. } => id.as_ref()
         }
     }
 
@@ -256,7 +263,8 @@ impl Display for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             Self::Result { id, result } => write!(f, "{}: {:?}", id, result),
-            Self::Error { id, error } => write!(f, "{}: {:?}", id, error)
+            Self::Error { id: None, error } => write!(f, "-: {:?}", error),
+            Self::Error { id: Some(id), error } => write!(f, "{}: {:?}", id, error)
         }
     }
 }
@@ -482,7 +490,7 @@ mod test {
     fn test_response_new() {
         let response = Response::new_result("0ff1", json!("echoed"));
 
-        assert_eq!(response.id(), "0ff1");
+        assert_eq!(response.id(), Some(&"0ff1".to_string()));
         assert_eq!(response.result(), Some(&json!("echoed")));
     }
 
@@ -502,7 +510,7 @@ mod test {
             "{\"jsonrpc\":\"2.0\",\"id\":\"0ff1\",\"result\":{\"nested\":{\"structure\":true}}}"
         ).unwrap();
 
-        assert_eq!(response.id(), "0ff1");
+        assert_eq!(response.id(), Some(&"0ff1".to_string()));
         assert_eq!(response.result(), Some(&json!({ "nested": {"structure": true } })));
     }
 

@@ -13,7 +13,6 @@ use lapin::{
     ConnectionProperties,
     Result as LapinResult
 };
-use serde_json::json;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
@@ -79,7 +78,14 @@ impl<C> Worker<C> where C : Responder {
                     incoming = consumer.next() => {
                         match incoming {
                             Some(Ok((channel, delivery))) => {
-                                self.handle_rpc_delivery(&channel, &delivery).await;
+                                let response = self.handle_rpc_delivery(&delivery).await;
+
+                                self.try_reply_to(&channel, &delivery, &response).await;
+
+                                channel.basic_ack(
+                                    delivery.delivery_tag,
+                                    BasicAckOptions::default()
+                                ).map(|_| ()).await;
                             },
                             Some(Err(err)) => {
                                 log::error!("Error: {:?}", err);
@@ -120,14 +126,14 @@ impl<C> Worker<C> where C : Responder {
                         // FIX: Warn on transmission error
                     },
                     Err(err) => {
-                        log::warn!("Error: Internal processing error {:?}", err);
+                        log::warn!("Error: Internal processing error when replying {:?}", err);
                     }
                 }
             }
         }
     }
 
-    async fn handle_rpc_delivery(&mut self, channel: &Channel, delivery: &Delivery) {
+    async fn handle_rpc_delivery(&mut self, delivery: &Delivery) -> rpc::Response {
         match std::str::from_utf8(&delivery.data) {
             Ok(s) => {
                 match serde_json::from_str::<Value>(s) {
@@ -138,9 +144,9 @@ impl<C> Worker<C> where C : Responder {
                                     "2.0" => {
                                         match serde_json::from_str::<rpc::Request>(s) {
                                             Ok(request) => {
-                                                // NOTE: Have to avoid holding the Response open,
-                                                //       so a little dance is required.
-                                                let response = match self.context.respond(&request).await {
+                                                // NOTE: References to the response need to be dropped
+                                                //       prior to sending the reply.
+                                                match self.context.respond(&request).await {
                                                     Ok(result) => {
                                                         rpc::Response::result_for(&request, result)
                                                     },
@@ -149,43 +155,58 @@ impl<C> Worker<C> where C : Responder {
 
                                                         rpc::Response::error_for(&request, -32603, "Internal processing error", None)
                                                     }
-                                                };
-
-                                                self.try_reply_to(channel, delivery, &response).await;
-
+                                                }
                                             },
                                             Err(err) => {
                                                 log::warn!("Error: JSON-RPC deserialization error {:?}", err);
+
+                                                rpc::Response::new_error_without_id(
+                                                    rpc::ErrorResponse::new(-32700, "Parse error, invalid JSON", None)
+                                                )
                                             }
                                         }
                                     },
                                     ver => {
                                         log::warn!("Error: Mismatched JSON-RPC version {:?}", ver);
+
+                                        rpc::Response::new_error_without_id(
+                                            rpc::ErrorResponse::new(-32600, "Invalid JSON-RPC version number", None)
+                                        )
                                     }
                                 }
                             },
                             Value::Null => {
                                 log::warn!("Error: \"jsonrpc\" attribute missing");
+                                rpc::Response::new_error_without_id(
+                                    rpc::ErrorResponse::new(-32600, "Missing JSON-RPC version", None)
+                                )
                             },
                             _ => {
                                 log::warn!("Error: \"jsonrpc\" attribute is not a string");
+
+                                rpc::Response::new_error_without_id(
+                                    rpc::ErrorResponse::new(-32603, "Non-string JSON-RPC version field", None)
+                                )
                             }
                         }
                     },
                     Err(e) => {
                         log::warn!("Error: Invalid JSON in message ({})", e);
+
+                        rpc::Response::new_error_without_id(
+                            rpc::ErrorResponse::new(-32700, "Parse error, invalid JSON", None)
+                        )
                     }
                 }
             },
             Err(e) => {
                 log::warn!("Error: Invalid UTF-8 in message ({})", e);
+
+                rpc::Response::new_error_without_id(
+                    rpc::ErrorResponse::new(-32603, "Internal processing error", None)
+                )
             }
         }
-
-        channel.basic_ack(
-            delivery.delivery_tag,
-            BasicAckOptions::default()
-        ).map(|_| ()).await;
     }
 }
 
