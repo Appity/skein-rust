@@ -14,7 +14,6 @@ use lapin::{
     ConnectionProperties,
     Result as LapinResult
 };
-use serde_json::Value;
 use tokio::task::JoinHandle;
 
 use crate::Responder;
@@ -163,6 +162,7 @@ mod test {
 
     use async_trait::async_trait;
     use serde_json::json;
+    use serde_json::Value;
 
     use super::*;
 

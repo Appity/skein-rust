@@ -47,6 +47,10 @@ impl Responder for WorkerContext {
             }
         }
     }
+
+    fn terminated(&self) -> bool {
+        self.terminated
+    }
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -68,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let context = WorkerContext::default();
     let worker = Worker::new(context, amqp_url, queue).await?;
 
-    worker.run().await?;
+    worker.run().await??;
 
     Ok(())
 }
