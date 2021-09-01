@@ -77,10 +77,10 @@ impl Serialize for Request {
     }
 }
 
-impl TryFrom<Delivery> for Request {
+impl TryFrom<&Delivery> for Request {
     type Error = Response;
 
-    fn try_from(delivery: Delivery) -> Result<Request, Response> {
+    fn try_from(delivery: &Delivery) -> Result<Self, Response> {
         match std::str::from_utf8(&delivery.data) {
             Ok(s) => {
                 match serde_json::from_str::<Value>(s) {
@@ -407,6 +407,7 @@ impl<'de> Deserialize<'de> for Response {
                 formatter.write_str("struct Response")
             }
 
+            // FUTURE: Figure out how to handle branching in a serializer.
             // fn visit_seq<V>(self, mut seq: V) -> Result<Response, V::Error>
             // where
             //     V: SeqAccess<'de>,
@@ -500,6 +501,62 @@ impl Serialize for Response {
         }
 
         state.end()
+    }
+}
+
+impl TryFrom<&Delivery> for Response {
+    type Error = &'static str;
+
+    fn try_from(delivery: &Delivery) -> Result<Self, &'static str> {
+        match std::str::from_utf8(&delivery.data) {
+            Ok(s) => {
+                match serde_json::from_str::<Value>(s) {
+                    Ok(v) => {
+                        match &v["jsonrpc"] {
+                            Value::String(ver) => {
+                                match ver.as_str() {
+                                    "2.0" => {
+                                        match serde_json::from_str::<Response>(s) {
+                                            Ok(request) => Ok(request),
+                                            Err(err) => {
+                                                log::warn!("Error: JSON-RPC deserialization error {:?}", err);
+
+                                                Err("Parse error, invalid JSON")
+                                            }
+                                        }
+                                    },
+                                    ver => {
+                                        log::warn!("Error: Mismatched JSON-RPC version {:?}", ver);
+
+                                        Err("Invalid JSON-RPC version number")
+                                    }
+                                }
+                            },
+                            Value::Null => {
+                                log::warn!("Error: \"jsonrpc\" attribute missing");
+
+                                Err("Missing JSON-RPC version")
+                            },
+                            _ => {
+                                log::warn!("Error: \"jsonrpc\" attribute is not a string");
+
+                                Err("Non-string JSON-RPC version field")
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("Error: Invalid JSON in message ({})", e);
+
+                        Err("Parse error, invalid JSON")
+                    }
+                }
+            },
+            Err(e) => {
+                log::warn!("Error: Invalid UTF-8 in message ({})", e);
+
+                Err("Internal processing error")
+            }
+        }
     }
 }
 
