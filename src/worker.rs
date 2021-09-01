@@ -115,6 +115,7 @@ impl<C> Worker<C> where C : Responder {
                     Ok(str) => {
                         let payload = str.as_bytes().to_vec();
 
+                        // FIX: Warn on transmission error
                         channel.basic_publish(
                             "",
                             reply_to,
@@ -122,8 +123,6 @@ impl<C> Worker<C> where C : Responder {
                             payload,
                             BasicProperties::default().with_content_type(ShortString::from("application/json"))
                         ).await.ok();
-
-                        // FIX: Warn on transmission error
                     },
                     Err(err) => {
                         log::warn!("Error: Internal processing error when replying {:?}", err);

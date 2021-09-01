@@ -1,5 +1,7 @@
+use std::convert::TryFrom;
 use std::fmt::{self,Display};
 
+use lapin::message::Delivery;
 use serde::{Serialize, Deserialize};
 use serde_json::json;
 use serde_json::Value;
@@ -19,6 +21,14 @@ impl Request {
             id: id.to_string(),
             method: method.to_string(),
             params
+        }
+    }
+
+    pub fn new_serialize(id: impl ToString, method: impl ToString, params: Option<impl Into<Value>>) -> Self {
+        Self {
+            id: id.to_string(),
+            method: method.to_string(),
+            params: params.map(|p| p.into())
         }
     }
 
@@ -64,6 +74,86 @@ impl Serialize for Request {
                 "method": &self.method
             })
         }.serialize(serializer)
+    }
+}
+
+impl TryFrom<Delivery> for Request {
+    type Error = Response;
+
+    fn try_from(delivery: Delivery) -> Result<Request, Response> {
+        match std::str::from_utf8(&delivery.data) {
+            Ok(s) => {
+                match serde_json::from_str::<Value>(s) {
+                    Ok(v) => {
+                        match &v["jsonrpc"] {
+                            Value::String(ver) => {
+                                match ver.as_str() {
+                                    "2.0" => {
+                                        match serde_json::from_str::<Request>(s) {
+                                            Ok(request) => Ok(request),
+                                            Err(err) => {
+                                                log::warn!("Error: JSON-RPC deserialization error {:?}", err);
+
+                                                Err(
+                                                    Response::new_error_without_id(
+                                                        ErrorResponse::new(-32700, "Parse error, invalid JSON", None)
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    },
+                                    ver => {
+                                        log::warn!("Error: Mismatched JSON-RPC version {:?}", ver);
+
+                                        Err(
+                                            Response::new_error_without_id(
+                                                ErrorResponse::new(-32600, "Invalid JSON-RPC version number", None)
+                                            )
+                                        )
+                                    }
+                                }
+                            },
+                            Value::Null => {
+                                log::warn!("Error: \"jsonrpc\" attribute missing");
+
+                                Err(
+                                    Response::new_error_without_id(
+                                        ErrorResponse::new(-32600, "Missing JSON-RPC version", None)
+                                    )
+                                )
+                            },
+                            _ => {
+                                log::warn!("Error: \"jsonrpc\" attribute is not a string");
+
+                                Err(
+                                    Response::new_error_without_id(
+                                        ErrorResponse::new(-32603, "Non-string JSON-RPC version field", None)
+                                    )
+                                )
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("Error: Invalid JSON in message ({})", e);
+
+                        Err(
+                            Response::new_error_without_id(
+                                ErrorResponse::new(-32700, "Parse error, invalid JSON", None)
+                            )
+                        )
+                    }
+                }
+            },
+            Err(e) => {
+                log::warn!("Error: Invalid UTF-8 in message ({})", e);
+
+                Err(
+                    Response::new_error_without_id(
+                        ErrorResponse::new(-32603, "Internal processing error", None)
+                    )
+                )
+            }
+        }
     }
 }
 
