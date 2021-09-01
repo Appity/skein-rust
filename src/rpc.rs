@@ -316,14 +316,14 @@ impl Serialize for Response {
 }
 
 #[derive(Clone,Debug,Eq,PartialEq)]
-pub struct Error {
+pub struct ErrorResponse {
     pub id : String,
     pub code : i32,
     pub message : String,
     pub data : Option<Value>
 }
 
-impl Error {
+impl ErrorResponse {
     pub fn new(id: impl ToString, code: i32, message: impl ToString, data: Option<Value>) -> Self {
         Self {
             id: id.to_string(),
@@ -334,7 +334,7 @@ impl Error {
     }
 }
 
-impl Serialize for Error {
+impl Serialize for ErrorResponse {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -359,7 +359,7 @@ impl Serialize for Error {
     }
 }
 
-impl<'de> Deserialize<'de> for Error {
+impl<'de> Deserialize<'de> for ErrorResponse {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -399,16 +399,16 @@ impl<'de> Deserialize<'de> for Error {
             }
         }
 
-        struct ErrorVisitor;
+        struct ErrorResponseVisitor;
 
-        impl<'de> Visitor<'de> for ErrorVisitor {
-            type Value = Error;
+        impl<'de> Visitor<'de> for ErrorResponseVisitor {
+            type Value = ErrorResponse;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("struct Request")
             }
 
-            fn visit_seq<V>(self, mut seq: V) -> Result<Error, V::Error>
+            fn visit_seq<V>(self, mut seq: V) -> Result<ErrorResponse, V::Error>
             where
                 V: SeqAccess<'de>,
             {
@@ -422,10 +422,10 @@ impl<'de> Deserialize<'de> for Error {
                     .ok_or_else(|| de::Error::invalid_length(3, &self))?;
                 let data : Option<Value> = seq.next_element()?;
 
-                Ok(Error::new(id, code, message, data))
+                Ok(ErrorResponse::new(id, code, message, data))
             }
 
-            fn visit_map<V>(self, mut map: V) -> Result<Error, V::Error>
+            fn visit_map<V>(self, mut map: V) -> Result<ErrorResponse, V::Error>
             where
                 V: MapAccess<'de>,
             {
@@ -475,13 +475,13 @@ impl<'de> Deserialize<'de> for Error {
                 let code : i32 = code.ok_or_else(|| de::Error::missing_field("code"))?;
                 let message : String = message.ok_or_else(|| de::Error::missing_field("method"))?;
 
-                Ok(Error::new(id, code, message, data))
+                Ok(ErrorResponse::new(id, code, message, data))
             }
         }
 
-        const FIELDS: &'static [&'static str] = &[ "id", "message", "data" ];
+        const FIELDS: &'static [&'static str] = &[ "id", "code", "message", "data" ];
 
-        deserializer.deserialize_struct("Error", FIELDS, ErrorVisitor)
+        deserializer.deserialize_struct("Error", FIELDS, ErrorResponseVisitor)
     }
 }
 
@@ -570,11 +570,23 @@ mod test {
 
     #[test]
     fn test_error_serialize() {
-        let error = Error::new("ff0f", -32000, "Test message", None);
+        let error = ErrorResponse::new("ff0f", -32000, "Test message", None);
 
         assert_eq!(
             serde_json::to_string(&error).unwrap(),
             "{\"jsonrpc\":\"2.0\",\"id\":\"ff0f\",\"error\":{\"code\":-32000,\"message\":\"Test message\"}}"
         );
+    }
+
+    #[test]
+    fn test_error_deserialize() {
+        let error : ErrorResponse = serde_json::from_str(
+            "{\"jsonrpc\":\"2.0\",\"id\":\"ff0f\",\"error\":{\"code\":-32000,\"message\":\"Test message\"}}"
+        ).unwrap();
+
+        assert_eq!(error.id, "ff0f");
+        assert_eq!(error.code, -32000);
+        assert_eq!(error.message, "Test message");
+        assert_eq!(error.data, None);
     }
 }

@@ -3,7 +3,6 @@ use futures::stream::StreamExt;
 use std::sync::Arc;
 
 use amq_protocol_types::ShortString;
-use async_trait::async_trait;
 use lapin::{
     BasicProperties,
     options::*,
@@ -15,19 +14,19 @@ use lapin::{
     Result as LapinResult
 };
 use serde_json::json;
-use serde::ser::Serialize;
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
 use super::Responder;
+use super::rpc;
 
-pub struct Worker<C> where C : Send + Sized + Sync + 'static {
+pub struct Worker<C> where C : Responder {
     context: C,
     channel: Arc<Channel>,
     queue_name: String
 }
 
-impl<C> Worker<C> where C : Send + Sized + Sync + 'static  {
+impl<C> Worker<C> where C : Responder {
     pub async fn new(context: C, amqp_addr: impl ToString, queue_name: impl ToString) -> LapinResult<Worker<C>> {
         let connection = Connection::connect(
             amqp_addr.to_string().as_str(),
@@ -97,24 +96,6 @@ impl<C> Worker<C> where C : Send + Sized + Sync + 'static  {
         })
     }
 
-    fn json_rpc_error_reply<S>(code: i32, message: S, data: Option<Value>) -> Value where S : Serialize {
-        if let Some(data) = data {
-            json!({
-                "jsonrpc": "2.0",
-                "code": code,
-                "message": message,
-                "data": data
-            })
-        }
-        else {
-            json!({
-                "jsonrpc": "2.0",
-                "code": code,
-                "message": message
-            })
-        }
-    }
-
     async fn try_reply_to(&self, channel: &Channel, delivery: &Delivery, reply: Value) {
         if let Some(reply_to) = delivery.properties.reply_to() {
             let reply_to = reply_to.as_str();
@@ -142,10 +123,21 @@ impl<C> Worker<C> where C : Send + Sized + Sync + 'static  {
                             Value::String(ver) => {
                                 match ver.as_str() {
                                     "2.0" => {
-                                        // let reply = self.handle_json_rpc(v).await;
-
-                                        // self.try_reply_to(channel, delivery, reply).await;
-                                        log::warn!("...");
+                                        match serde_json::from_str::<rpc::Request>(s) {
+                                            Ok(request) => {
+                                                match self.context.respond(&request).await {
+                                                    Ok(reply) => {
+                                                        let response = rpc::Response::to(&request, reply);
+                                                    },
+                                                    Err(err) => {
+                                                        log::warn!("Error: Internal processing error {:?}", err);
+                                                    }
+                                                }
+                                            },
+                                            Err(err) => {
+                                                log::warn!("Error: JSON-RPC deserialization error {:?}", err);
+                                            }
+                                        }
                                     },
                                     ver => {
                                         log::warn!("Error: Mismatched JSON-RPC version {:?}", ver);
