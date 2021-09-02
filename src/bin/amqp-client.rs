@@ -22,6 +22,10 @@ struct Program {
     amqp_url : Option<String>,
     #[clap(short,long,default_value="skein_test")]
     queue : String,
+    #[clap(short,long)]
+    silent: bool,
+    #[clap(short='t',long)]
+    report: bool,
     #[clap(short,long,default_value="1")]
     repeat: usize,
     #[clap(short,long,default_value="10",parse(try_from_str=Self::try_into_duration))]
@@ -66,20 +70,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for _ in 0..program.repeat {
         match client.rpc_request(method.as_str(), params.clone()).await {
             Ok(response) => {
-                if program.verbose {
-                    println!("{:?}", response);
+                if !program.silent {
+                    println!("{}", response.to_string());
                 }
             }
             Err(err) => {
                 log::error!("Error: {}", err);
             }
         }
-
     }
 
-    let elapsed = now.elapsed().as_secs_f64();
+    if program.report {
+        let elapsed = now.elapsed().as_secs_f64();
 
-    log::info!("Completed {} request(s) in {:.2}s ({:.1}RPS)", program.repeat, elapsed, program.repeat as f64/elapsed);
+        log::info!("Completed {} request(s) in {:.2}s ({:.1}RPS)", program.repeat, elapsed, program.repeat as f64/elapsed);
+    }
 
     Ok(())
 }
