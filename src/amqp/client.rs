@@ -90,7 +90,7 @@ impl ClientOptions {
 
 #[derive(Debug)]
 pub struct Client {
-    rpc: UnboundedSender<(rpc::Request, OneshotSender<rpc::Response>)>,
+    rpc: UnboundedSender<(rpc::Request, Option<OneshotSender<rpc::Response>>)>,
     options: ClientOptions,
     handle: JoinHandle<()>
 }
@@ -143,7 +143,7 @@ impl Client {
             FieldTable::default()
         ).await?;
 
-        let (tx, mut rx) = unbounded_channel::<(rpc::Request, OneshotSender<rpc::Response>)>();
+        let (tx, mut rx) = unbounded_channel::<(rpc::Request, Option<OneshotSender<rpc::Response>>)>();
 
         let rpc_queue_name = queue_name.clone();
         let reply_to = ident.clone();
@@ -169,25 +169,27 @@ impl Client {
                                             properties.clone()
                                         };
 
-                                        match channel.basic_publish(
-                                            "", // FUTURE: Allow specifying exchange
-                                            rpc_queue_name,
-                                            Default::default(),
-                                            payload,
-                                            properties
-                                        ).await {
-                                            Ok(_) => {
-                                                requests.insert(request.id().clone(), (request,reply));
-                                            },
-                                            Err(err) => {
-                                                reply.send(
-                                                    rpc::Response::error_for(
-                                                        &request,
-                                                        -32603,
-                                                        format!("Could not send request: {}", err),
-                                                        None
-                                                    )
-                                                ).ok();
+                                        if let Some(reply) = reply {
+                                            match channel.basic_publish(
+                                                "", // FUTURE: Allow specifying exchange
+                                                rpc_queue_name,
+                                                Default::default(),
+                                                payload,
+                                                properties
+                                            ).await {
+                                                Ok(_) => {
+                                                    requests.insert(request.id().clone(), (request,reply));
+                                                },
+                                                Err(err) => {
+                                                    reply.send(
+                                                        rpc::Response::error_for(
+                                                            &request,
+                                                            -32603,
+                                                            format!("Could not send request: {}", err),
+                                                            None
+                                                        )
+                                                    ).ok();
+                                                }
                                             }
                                         }
                                     },
@@ -260,16 +262,16 @@ impl Client {
 #[async_trait]
 impl ClientTrait for Client {
     async fn rpc_request_serialize<T>(&self, method: impl ToString + Send + 'async_trait, params: Option<impl Into<Value> + Send + 'async_trait>) -> Result<T, Box<dyn std::error::Error>> where T : From<Value> + Send + 'async_trait {
-        let (tx, rx) = oneshot_channel::<rpc::Response>();
+        let (reply, responder) = oneshot_channel::<rpc::Response>();
 
         self.rpc.send(
             (
                 rpc::Request::new_serialize(Uuid::new_v4().to_string(), method, params),
-                tx
+                Some(reply)
             )
         ).unwrap();
 
-        match timeout(self.options.timeout, rx).await?? {
+        match timeout(self.options.timeout, responder).await?? {
             rpc::Response::Result { result, .. } => {
                 Ok(result.into())
             },
@@ -287,7 +289,7 @@ impl ClientTrait for Client {
 
         log::debug!("{}> Request: {}", request.id(), &method);
 
-        self.rpc.send((request,reply)).unwrap();
+        self.rpc.send((request,Some(reply)))?;
 
         match timeout(self.options.timeout, responder).await?? {
             rpc::Response::Result { result, .. } => {
@@ -297,6 +299,18 @@ impl ClientTrait for Client {
                 Err(Box::new(error))
             }
         }
+    }
+
+    async fn rpc_request_noreply(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> Result<(), Box<dyn std::error::Error>> {
+        let method = method.to_string();
+
+        let request = rpc::Request::new_noreply(Uuid::new_v4().to_string(), &method, params);
+
+        log::debug!("{}> Request: {}", request.id(), &method);
+
+        self.rpc.send((request,None))?;
+
+        Ok(())
     }
 }
 
