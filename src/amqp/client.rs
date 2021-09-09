@@ -152,7 +152,7 @@ impl Client {
             let rpc_queue_name = rpc_queue_name.as_str();
             let properties = BasicProperties::default().with_content_type(ShortString::from("application/json"));
 
-            let mut requests = HashMap::<String,(rpc::Request,OneshotSender<rpc::Response>)>::new();
+            let mut requests = HashMap::<String,OneshotSender<rpc::Response>>::new();
 
             loop {
                 tokio::select!(
@@ -169,18 +169,20 @@ impl Client {
                                             properties.clone()
                                         };
 
-                                        if let Some(reply) = reply {
-                                            match channel.basic_publish(
-                                                "", // FUTURE: Allow specifying exchange
-                                                rpc_queue_name,
-                                                Default::default(),
-                                                payload,
-                                                properties
-                                            ).await {
-                                                Ok(_) => {
-                                                    requests.insert(request.id().clone(), (request,reply));
-                                                },
-                                                Err(err) => {
+                                        match channel.basic_publish(
+                                            "", // FUTURE: Allow specifying exchange
+                                            rpc_queue_name,
+                                            Default::default(),
+                                            payload,
+                                            properties
+                                        ).await {
+                                            Ok(_) => {
+                                                if let Some(reply) = reply {
+                                                    requests.insert(request.id().clone(), reply);
+                                                }
+                                            },
+                                            Err(err) => {
+                                                if let Some(reply) = reply {
                                                     reply.send(
                                                         rpc::Response::error_for(
                                                             &request,
@@ -209,7 +211,7 @@ impl Client {
                                         match response.id() {
                                             Some(id) => {
                                                 match requests.remove(id) {
-                                                    Some((_,reply)) => {
+                                                    Some(reply) => {
                                                         reply.send(response).ok();
                                                     },
                                                     None => {
