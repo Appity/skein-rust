@@ -110,7 +110,7 @@ impl<C> Worker<C> where C : Responder {
         if let Some(reply_to) = delivery.properties.reply_to() {
             let reply_to = reply_to.as_str();
 
-            if reply_to.len() > 0 {
+            if !reply_to.is_empty() {
                 match serde_json::to_string(response) {
                     Ok(str) => {
                         let payload = str.as_bytes().to_vec();

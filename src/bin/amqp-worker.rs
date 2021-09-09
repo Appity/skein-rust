@@ -40,7 +40,7 @@ impl Responder for WorkerContext {
     async fn respond(&mut self, request: &rpc::Request) -> Result<Value,Box<dyn Error>> {
         match request.method().as_str() {
             "echo" => {
-                Ok(request.params().map(|p| p.clone()).unwrap_or(json!(null)))
+                Ok(request.params().cloned().unwrap_or(json!(null)))
             },
             _ => {
                 Err(Box::new(rpc::ErrorResponse::new(-32601, "Method not found", None)))
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     ).init().unwrap();
 
-    let amqp_url = program.amqp_url.unwrap_or(env::var("AMQP_URL").unwrap_or("amqp://localhost:5672/%2f".to_string()));
+    let amqp_url = program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string()));
     let queue = program.queue;
 
     let context = WorkerContext::default();

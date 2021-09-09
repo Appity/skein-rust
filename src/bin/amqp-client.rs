@@ -37,7 +37,7 @@ struct Program {
 
 impl Program {
     fn try_into_duration(s: &str) -> Result<Duration, ParseIntError> {
-        s.parse().map(|seconds| Duration::from_secs(seconds))
+        s.parse().map(Duration::from_secs)
     }
 }
 
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     ).init().unwrap();
 
-    let amqp_url = program.amqp_url.unwrap_or(env::var("AMQP_URL").unwrap_or("amqp://localhost:5672/%2f".to_string()));
+    let amqp_url = program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string()));
     let queue = program.queue;
 
     let options = AMQPClientOptions::new(
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ).with_timeout(program.timeout);
 
     let client = AMQPClient::new(options).await?;
-    let method = program.method.unwrap_or("echo".to_string());
+    let method = program.method.unwrap_or_else(|| "echo".to_string());
     let params = Some(json!(program.args));
 
     let now = Instant::now();

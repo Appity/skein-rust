@@ -281,7 +281,7 @@ impl<'de> Deserialize<'de> for Request {
             }
         }
 
-        const FIELDS: &'static [&'static str] = &[ "id", "request", "params" ];
+        const FIELDS: &[&str] = &[ "id", "request", "params" ];
 
         deserializer.deserialize_struct("Request", FIELDS, RequestVisitor)
     }
@@ -343,23 +343,17 @@ impl Response {
 
     pub fn id(&self) -> Option<&String> {
         match self {
-            Self::Result { id, .. } => Some(&id),
+            Self::Result { id, .. } => Some(id),
             Self::Error { id, .. } => id.as_ref()
         }
     }
 
     pub fn is_result(&self) -> bool {
-        match self {
-            Self::Result { .. } => true,
-            _ => false
-        }
+        matches!(self, Self::Result { .. })
     }
 
     pub fn is_error(&self) -> bool {
-        match self {
-            Self::Error { .. } => true,
-            _ => false
-        }
+        matches!(self, Self::Error { .. })
     }
 
     pub fn result(&self) -> Option<&Value> {
@@ -497,7 +491,7 @@ impl<'de> Deserialize<'de> for Response {
             }
         }
 
-        const FIELDS: &'static [&'static str] = &[ "jsonrpc", "id", "result", "error" ];
+        const FIELDS: &[&str] = &[ "jsonrpc", "id", "result", "error" ];
 
         deserializer.deserialize_struct("Response", FIELDS, ResponseVisitor)
     }
