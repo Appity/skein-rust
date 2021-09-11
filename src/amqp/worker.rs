@@ -1,7 +1,6 @@
 use futures::future::FutureExt;
 use futures::stream::StreamExt;
 use std::convert::TryFrom;
-use std::sync::Arc;
 
 use amq_protocol_types::ShortString;
 use lapin::{
@@ -21,23 +20,33 @@ use tokio::time::sleep;
 use crate::Responder;
 use crate::rpc;
 
-pub struct Worker<C> where C : Responder {
-    context: C,
-    channel: Arc<Channel>,
+#[derive(Clone,Debug)]
+pub struct WorkerConfig {
+    amqp_addr: String,
     queue_name: String
 }
 
-impl<C> Worker<C> where C : Responder {
-    pub async fn new(context: C, amqp_addr: impl ToString, queue_name: impl ToString) -> LapinResult<Worker<C>> {
+impl WorkerConfig {
+    pub fn new(amqp_addr: impl ToString, queue_name: impl ToString) -> Self {
+        let amqp_addr = amqp_addr.to_string();
+        let queue_name = queue_name.to_string();
+
+        Self {
+            amqp_addr,
+            queue_name
+        }
+    }
+
+    async fn channel(&self) -> LapinResult<Channel> {
         let connection = Connection::connect(
-            amqp_addr.to_string().as_str(),
+            self.amqp_addr.as_str(),
             ConnectionProperties::default().with_default_executor(8),
         ).await?;
 
         let channel = connection.create_channel().await?;
 
         channel.queue_declare(
-            queue_name.to_string().as_str(),
+            self.queue_name.as_str(),
             QueueDeclareOptions {
                 passive: false,
                 durable: true,
@@ -48,76 +57,94 @@ impl<C> Worker<C> where C : Responder {
             FieldTable::default()
         ).await?;
 
-        let queue_name = queue_name.to_string();
+        Ok(channel)
+    }
+}
 
+pub struct Worker<C> where C : Responder {
+    context: C,
+    config: WorkerConfig
+}
+
+
+impl<C> Worker<C> where C : Responder {
+    pub fn new(context: C, amqp_addr: impl ToString, queue_name: impl ToString) -> LapinResult<Worker<C>> {
         Ok(
             Worker {
                 context,
-                channel: Arc::new(channel),
-                queue_name
+                config: WorkerConfig::new(amqp_addr, queue_name)
             }
         )
     }
 
     pub fn queue_name(&self) -> &str {
-        self.queue_name.as_str()
+        self.config.queue_name.as_str()
     }
 
     pub fn run(mut self) -> JoinHandle<LapinResult<Self>> {
+        let config = self.config.clone();
+        let queue_name = self.config.queue_name.clone();
+
         tokio::spawn(async move {
-            let channel = self.channel.clone();
-            let queue_name = self.queue_name.clone();
-
             loop {
-                match channel.basic_consume(
-                    queue_name.as_str(),
-                    "",
-                    BasicConsumeOptions::default(),
-                    FieldTable::default()
-                ).await {
-                    Ok(mut consumer) => {
-                        loop {
-                            tokio::select!(
-                                incoming = consumer.next() => {
-                                    match incoming {
-                                        Some(Ok((channel, delivery))) => {
-                                            let response = self.handle_rpc_delivery(&delivery).await;
+                match config.channel().await {
+                    Ok(channel) => {
+                        match channel.basic_consume(
+                            queue_name.as_str(),
+                            "",
+                            BasicConsumeOptions::default(),
+                            FieldTable::default()
+                        ).await {
+                            Ok(mut consumer) => {
+                                loop {
+                                    tokio::select!(
+                                        incoming = consumer.next() => {
+                                            match incoming {
+                                                Some(Ok((channel, delivery))) => {
+                                                    let response = self.handle_rpc_delivery(&delivery).await;
 
-                                            self.try_reply_to(&channel, &delivery, &response).await;
+                                                    self.try_reply_to(&channel, &delivery, &response).await;
 
-                                            channel.basic_ack(
-                                                delivery.delivery_tag,
-                                                BasicAckOptions::default()
-                                            ).map(|_| ()).await;
-                                        },
-                                        Some(Err(err)) => {
-                                            log::error!("Error: {:?}", err);
-                                            log::warn!("AMQP consumer reconnecting.");
+                                                    channel.basic_ack(
+                                                        delivery.delivery_tag,
+                                                        BasicAckOptions::default()
+                                                    ).map(|_| ()).await;
+                                                },
+                                                Some(Err(err)) => {
+                                                    log::error!("Error: {:?}", err);
+                                                    log::warn!("AMQP consumer reconnecting.");
 
-                                            break;
-                                        },
-                                        None => {
-                                            log::warn!("AMQP consumer ran dry? Reconnecting.");
+                                                    break;
+                                                },
+                                                None => {
+                                                    log::warn!("AMQP consumer ran dry? Reconnecting.");
 
-                                            break;
+                                                    break;
+                                                }
+                                            }
                                         }
+                                    );
+
+                                    if self.context.terminated() {
+                                        log::debug!("Worker terminated by request");
+
+                                        return Ok(self);
                                     }
                                 }
-                            );
+                            },
+                            Err(err) => {
+                                log::error!("Error connecting consumer: {}", err);
 
-                            if self.context.terminated() {
-                                log::debug!("Worker terminated by request");
+                                sleep(Duration::from_secs(5)).await;
 
-                                return Ok(self);
+                                log::warn!("AMQP consumer reconnecting.");
                             }
                         }
                     },
                     Err(err) => {
-                        log::error!("Error connecting consumer: {}", err);
+                        log::error!("Error connecting channel: {}", err);
 
                         sleep(Duration::from_secs(5)).await;
-
-                        log::warn!("AMQP consumer reconnecting.");
                     }
                 }
             }
@@ -217,7 +244,7 @@ mod test {
             context,
             env::var("AMQP_URL").unwrap_or("amqp://localhost:5672/%2f".to_string()),
             "test"
-        ).await.unwrap();
+        ).unwrap();
 
         worker.run().abort();
     }

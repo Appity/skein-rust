@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let queue = program.queue;
 
     let context = WorkerContext::default();
-    let worker = Worker::new(context, amqp_url, queue).await?;
+    let worker = Worker::new(context, amqp_url, queue)?;
 
     worker.run().await??;
 
