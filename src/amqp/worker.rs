@@ -16,6 +16,7 @@ use lapin::{
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio::time::sleep;
+use tokio::time::timeout;
 
 use crate::Responder;
 use crate::rpc;
@@ -23,17 +24,21 @@ use crate::rpc;
 #[derive(Clone,Debug)]
 pub struct WorkerConfig {
     amqp_addr: String,
-    queue_name: String
+    queue_name: String,
+    timeout_warning: Duration,
+    timeout_terminate: Duration
 }
 
 impl WorkerConfig {
-    pub fn new(amqp_addr: impl ToString, queue_name: impl ToString) -> Self {
+    pub fn new(amqp_addr: impl ToString, queue_name: impl ToString, timeout_warning: Option<Duration>, timeout_terminate: Option<Duration>) -> Self {
         let amqp_addr = amqp_addr.to_string();
         let queue_name = queue_name.to_string();
 
         Self {
             amqp_addr,
-            queue_name
+            queue_name,
+            timeout_warning: timeout_warning.unwrap_or_else(|| Duration::from_secs(30)),
+            timeout_terminate: timeout_terminate.unwrap_or_else(|| Duration::from_secs(300))
         }
     }
 
@@ -66,13 +71,12 @@ pub struct Worker<C> where C : Responder {
     config: WorkerConfig
 }
 
-
 impl<C> Worker<C> where C : Responder {
-    pub fn new(context: C, amqp_addr: impl ToString, queue_name: impl ToString) -> LapinResult<Worker<C>> {
+    pub fn new(context: C, amqp_addr: impl ToString, queue_name: impl ToString, timeout_warning: Option<Duration>, timeout_terminate: Option<Duration>) -> LapinResult<Worker<C>> {
         Ok(
             Worker {
                 context,
-                config: WorkerConfig::new(amqp_addr, queue_name)
+                config: WorkerConfig::new(amqp_addr, queue_name, timeout_warning, timeout_terminate)
             }
         )
     }
@@ -101,14 +105,35 @@ impl<C> Worker<C> where C : Responder {
                                         incoming = consumer.next() => {
                                             match incoming {
                                                 Some(Ok((channel, delivery))) => {
-                                                    let response = self.handle_rpc_delivery(&delivery).await;
+                                                    let warning = sleep(self.config.timeout_warning);
 
-                                                    self.try_reply_to(&channel, &delivery, &response).await;
+                                                    tokio::join!(
+                                                        async {
+                                                            warning.await;
 
-                                                    channel.basic_ack(
-                                                        delivery.delivery_tag,
-                                                        BasicAckOptions::default()
-                                                    ).map(|_| ()).await;
+                                                            log::warn!("Timeout warning when processing RPC call");
+                                                        },
+                                                        async {
+                                                            match timeout(self.config.timeout_terminate, self.handle_rpc_delivery(&delivery)).await {
+                                                                Ok(response) => {
+                                                                    self.try_reply_to(&channel, &delivery, &response).await;
+
+                                                                    channel.basic_ack(
+                                                                        delivery.delivery_tag,
+                                                                        BasicAckOptions::default()
+                                                                    ).map(|_| ()).await;
+                                                                },
+                                                                Err(err) => {
+                                                                    log::error!("Timeout error when processing RPC call: {}", err);
+
+                                                                    channel.basic_nack(
+                                                                        delivery.delivery_tag,
+                                                                        BasicNackOptions::default()
+                                                                    ).map(|_| ()).await;
+                                                                }
+                                                            }
+                                                        }
+                                                    );
                                                 },
                                                 Some(Err(err)) => {
                                                     log::error!("Error: {:?}", err);
@@ -243,7 +268,9 @@ mod test {
         let worker = Worker::new(
             context,
             env::var("AMQP_URL").unwrap_or("amqp://localhost:5672/%2f".to_string()),
-            "test"
+            "test",
+            None,
+            None
         ).unwrap();
 
         worker.run().abort();

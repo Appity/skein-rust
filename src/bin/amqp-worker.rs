@@ -1,5 +1,6 @@
 use std::env;
 use std::error::Error;
+use std::num::ParseIntError;
 
 use async_trait::async_trait;
 use clap::Clap;
@@ -7,6 +8,8 @@ use log::LevelFilter;
 use serde_json::json;
 use serde_json::Value;
 use simple_logger::SimpleLogger;
+use tokio::time::sleep;
+use tokio::time::Duration;
 
 use skein_rpc::amqp::Worker;
 use skein_rpc::Responder;
@@ -19,8 +22,18 @@ struct Program {
     verbose : bool,
     #[clap(short,long)]
     amqp_url : Option<String>,
+    #[clap(long,parse(try_from_str=Self::try_into_duration))]
+    timeout_warning : Option<Duration>,
+    #[clap(long,parse(try_from_str=Self::try_into_duration))]
+    timeout_terminate : Option<Duration>,
     #[clap(short,long,default_value="skein_test")]
     queue : String
+}
+
+impl Program {
+    fn try_into_duration(s: &str) -> Result<Duration, ParseIntError> {
+        s.parse().map(|seconds| Duration::from_secs(seconds))
+    }
 }
 
 struct WorkerContext {
@@ -41,6 +54,11 @@ impl Responder for WorkerContext {
         match request.method().as_str() {
             "echo" => {
                 Ok(request.params().cloned().unwrap_or(json!(null)))
+            },
+            "stall" => {
+                sleep(Duration::from_secs(30)).await;
+
+                Ok(json!(false))
             },
             _ => {
                 Err(Box::new(rpc::ErrorResponse::new(-32601, "Method not found", None)))
@@ -70,7 +88,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let queue = program.queue;
 
     let context = WorkerContext::default();
-    let worker = Worker::new(context, amqp_url, queue)?;
+    let worker = Worker::new(
+        context,
+        amqp_url,
+        queue,
+        program.timeout_warning,
+        program.timeout_terminate
+    )?;
 
     worker.run().await??;
 
