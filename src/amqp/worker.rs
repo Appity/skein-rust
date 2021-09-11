@@ -15,6 +15,7 @@ use lapin::{
 };
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
+use tokio::time::Instant;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
@@ -85,6 +86,34 @@ impl<C> Worker<C> where C : Responder {
         self.config.queue_name.as_str()
     }
 
+    pub async fn handle_with_timeout(&mut self, channel: &Channel, delivery: &Delivery) {
+        // let mut warning = interval(self.config.timeout_warning);
+        let now = Instant::now();
+
+        match timeout(self.config.timeout_terminate, self.handle_rpc_delivery(&delivery)).await {
+            Ok(response) => {
+                self.try_reply_to(&channel, &delivery, &response).await;
+
+                channel.basic_ack(
+                    delivery.delivery_tag,
+                    BasicAckOptions::default()
+                ).map(|_| ()).await;
+
+                log::debug!("RPC call processed in {:.2}s", now.elapsed().as_secs_f32());
+            },
+            Err(err) => {
+                log::error!("Timeout error when processing RPC call: {}", err);
+
+                channel.basic_nack(
+                    delivery.delivery_tag,
+                    BasicNackOptions::default()
+                ).map(|_| ()).await;
+
+                log::debug!("RPC call failed in {:.2}s", now.elapsed().as_secs_f32());
+            }
+        }
+    }
+
     pub fn run(mut self) -> JoinHandle<LapinResult<Self>> {
         let config = self.config.clone();
         let queue_name = self.config.queue_name.clone();
@@ -101,54 +130,22 @@ impl<C> Worker<C> where C : Responder {
                         ).await {
                             Ok(mut consumer) => {
                                 loop {
-                                    tokio::select!(
-                                        incoming = consumer.next() => {
-                                            match incoming {
-                                                Some(Ok((channel, delivery))) => {
-                                                    let warning = sleep(self.config.timeout_warning);
+                                    match consumer.next().await {
+                                        Some(Ok((channel, delivery))) => {
+                                            self.handle_with_timeout(&channel, &delivery).await;
+                                        },
+                                        Some(Err(err)) => {
+                                            log::error!("Error: {:?}", err);
+                                            log::warn!("AMQP consumer reconnecting.");
 
-                                                    tokio::join!(
-                                                        async {
-                                                            warning.await;
+                                            break;
+                                        },
+                                        None => {
+                                            log::warn!("AMQP consumer ran dry? Reconnecting.");
 
-                                                            log::warn!("Timeout warning when processing RPC call");
-                                                        },
-                                                        async {
-                                                            match timeout(self.config.timeout_terminate, self.handle_rpc_delivery(&delivery)).await {
-                                                                Ok(response) => {
-                                                                    self.try_reply_to(&channel, &delivery, &response).await;
-
-                                                                    channel.basic_ack(
-                                                                        delivery.delivery_tag,
-                                                                        BasicAckOptions::default()
-                                                                    ).map(|_| ()).await;
-                                                                },
-                                                                Err(err) => {
-                                                                    log::error!("Timeout error when processing RPC call: {}", err);
-
-                                                                    channel.basic_nack(
-                                                                        delivery.delivery_tag,
-                                                                        BasicNackOptions::default()
-                                                                    ).map(|_| ()).await;
-                                                                }
-                                                            }
-                                                        }
-                                                    );
-                                                },
-                                                Some(Err(err)) => {
-                                                    log::error!("Error: {:?}", err);
-                                                    log::warn!("AMQP consumer reconnecting.");
-
-                                                    break;
-                                                },
-                                                None => {
-                                                    log::warn!("AMQP consumer ran dry? Reconnecting.");
-
-                                                    break;
-                                                }
-                                            }
+                                            break;
                                         }
-                                    );
+                                    }
 
                                     if self.context.terminated() {
                                         log::debug!("Worker terminated by request");
@@ -210,7 +207,7 @@ impl<C> Worker<C> where C : Responder {
     async fn handle_rpc_delivery(&mut self, delivery: &Delivery) -> rpc::Response {
         match rpc::Request::try_from(delivery) {
             Ok(request) => {
-                log::debug!("Request: {}", request.id());
+                log::debug!("Request received: {}", request.id());
 
                 match self.context.respond(&request).await {
                     Ok(result) => {
