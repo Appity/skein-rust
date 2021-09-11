@@ -132,6 +132,8 @@ impl<C> Worker<C> where C : Responder {
                                 loop {
                                     match consumer.next().await {
                                         Some(Ok((channel, delivery))) => {
+                                            log::debug!("Dispatching RPC call");
+
                                             self.handle_with_timeout(&channel, &delivery).await;
                                         },
                                         Some(Err(err)) => {
