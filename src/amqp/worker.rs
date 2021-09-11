@@ -15,6 +15,8 @@ use lapin::{
     Result as LapinResult
 };
 use tokio::task::JoinHandle;
+use tokio::time::Duration;
+use tokio::time::sleep;
 
 use crate::Responder;
 use crate::rpc;
@@ -67,45 +69,55 @@ impl<C> Worker<C> where C : Responder {
             let queue_name = self.queue_name.clone();
 
             loop {
-                let mut consumer = channel.basic_consume(
+                match channel.basic_consume(
                     queue_name.as_str(),
                     "",
                     BasicConsumeOptions::default(),
                     FieldTable::default()
-                ).await?;
+                ).await {
+                    Ok(mut consumer) => {
+                        loop {
+                            tokio::select!(
+                                incoming = consumer.next() => {
+                                    match incoming {
+                                        Some(Ok((channel, delivery))) => {
+                                            let response = self.handle_rpc_delivery(&delivery).await;
 
-                loop {
-                    tokio::select!(
-                        incoming = consumer.next() => {
-                            match incoming {
-                                Some(Ok((channel, delivery))) => {
-                                    let response = self.handle_rpc_delivery(&delivery).await;
+                                            self.try_reply_to(&channel, &delivery, &response).await;
 
-                                    self.try_reply_to(&channel, &delivery, &response).await;
+                                            channel.basic_ack(
+                                                delivery.delivery_tag,
+                                                BasicAckOptions::default()
+                                            ).map(|_| ()).await;
+                                        },
+                                        Some(Err(err)) => {
+                                            log::error!("Error: {:?}", err);
+                                            log::warn!("AMQP consumer reconnecting.");
 
-                                    channel.basic_ack(
-                                        delivery.delivery_tag,
-                                        BasicAckOptions::default()
-                                    ).map(|_| ()).await;
-                                },
-                                Some(Err(err)) => {
-                                    log::error!("Error: {:?}", err);
+                                            break;
+                                        },
+                                        None => {
+                                            log::warn!("AMQP consumer ran dry? Reconnecting.");
 
-                                    break;
-                                },
-                                None => {
-                                    log::warn!("AMQP consumer ran dry? Reconnecting.");
-
-                                    break;
+                                            break;
+                                        }
+                                    }
                                 }
+                            );
+
+                            if self.context.terminated() {
+                                log::debug!("Worker terminated by request");
+
+                                return Ok(self);
                             }
                         }
-                    );
+                    },
+                    Err(err) => {
+                        log::error!("Error connecting consumer: {}", err);
 
-                    if self.context.terminated() {
-                        log::debug!("Worker terminated by request");
+                        sleep(Duration::from_secs(5)).await;
 
-                        return Ok(self);
+                        log::warn!("AMQP consumer reconnecting.");
                     }
                 }
             }
@@ -122,13 +134,15 @@ impl<C> Worker<C> where C : Responder {
                         let payload = str.as_bytes().to_vec();
 
                         // FIX: Warn on transmission error
-                        channel.basic_publish(
+                        if let Err(err) = channel.basic_publish(
                             "",
                             reply_to,
                             Default::default(),
                             payload,
                             BasicProperties::default().with_content_type(ShortString::from("application/json"))
-                        ).await.ok();
+                        ).await {
+                            log::warn!("Error: Could not publish reply {:?}", err);
+                        }
                     },
                     Err(err) => {
                         log::warn!("Error: Internal processing error when replying {:?}", err);
