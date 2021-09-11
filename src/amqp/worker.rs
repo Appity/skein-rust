@@ -66,43 +66,49 @@ impl<C> Worker<C> where C : Responder {
             let channel = self.channel.clone();
             let queue_name = self.queue_name.clone();
 
-            let mut consumer = channel.basic_consume(
-                queue_name.as_str(),
-                "",
-                BasicConsumeOptions::default(),
-                FieldTable::default()
-            ).await?;
-
             loop {
-                tokio::select!(
-                    incoming = consumer.next() => {
-                        match incoming {
-                            Some(Ok((channel, delivery))) => {
-                                let response = self.handle_rpc_delivery(&delivery).await;
+                let mut consumer = channel.basic_consume(
+                    queue_name.as_str(),
+                    "",
+                    BasicConsumeOptions::default(),
+                    FieldTable::default()
+                ).await?;
 
-                                self.try_reply_to(&channel, &delivery, &response).await;
+                loop {
+                    tokio::select!(
+                        incoming = consumer.next() => {
+                            match incoming {
+                                Some(Ok((channel, delivery))) => {
+                                    let response = self.handle_rpc_delivery(&delivery).await;
 
-                                channel.basic_ack(
-                                    delivery.delivery_tag,
-                                    BasicAckOptions::default()
-                                ).map(|_| ()).await;
-                            },
-                            Some(Err(err)) => {
-                                log::error!("Error: {:?}", err);
-                            },
-                            None => {
-                                break;
+                                    self.try_reply_to(&channel, &delivery, &response).await;
+
+                                    channel.basic_ack(
+                                        delivery.delivery_tag,
+                                        BasicAckOptions::default()
+                                    ).map(|_| ()).await;
+                                },
+                                Some(Err(err)) => {
+                                    log::error!("Error: {:?}", err);
+
+                                    break;
+                                },
+                                None => {
+                                    log::warn!("AMQP consumer ran dry? Reconnecting.");
+
+                                    break;
+                                }
                             }
                         }
-                    }
-                );
+                    );
 
-                if self.context.terminated() {
-                    break;
+                    if self.context.terminated() {
+                        log::debug!("Worker terminated by request");
+
+                        return Ok(self);
+                    }
                 }
             }
-
-            Ok(self)
         })
     }
 
