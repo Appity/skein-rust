@@ -1,0 +1,11 @@
+Dockerfile
+
+.gitignore
+
+.env
+.DS_Store
+/.git
+/.vscode
+/target
+
+/build

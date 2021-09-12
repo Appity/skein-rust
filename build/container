@@ -1,0 +1,17 @@
+#!/bin/sh
+
+source "`dirname $0`"/../.env
+
+NAME=$(awk -F'[ ="]+' '$1 == "name" { print $2 }' Cargo.toml | head -1)
+VERSION=$(awk -F'[ ="]+' '$1 == "version" { print $2 }' Cargo.toml)
+
+echo "Building $NAME $VERSION"
+
+# FIX: Check that GH_TOKEN and GH_USER are both defined
+
+docker build . \
+  --platform linux/amd64 \
+  --build-arg GH_TOKEN=$GH_TOKEN \
+  --build-arg GH_USER=$GH_USER \
+  --tag ghcr.io/postageapp/$NAME:$VERSION \
+  $*
