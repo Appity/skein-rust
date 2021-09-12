@@ -1,0 +1,8 @@
+#!/bin/sh
+
+source "`dirname $0`"/../.env
+
+NAME=$(awk -F'[ ="]+' '$1 == "name" { print $2 }' Cargo.toml | head -1)
+VERSION=$(awk -F'[ ="]+' '$1 == "version" { print $2 }' Cargo.toml)
+
+docker run -it --rm ghcr.io/postageapp/$NAME:$VERSION bash
