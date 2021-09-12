@@ -4,6 +4,7 @@ use std::num::ParseIntError;
 
 use async_trait::async_trait;
 use clap::Clap;
+use dotenv::dotenv;
 use log::LevelFilter;
 use serde_json::json;
 use serde_json::Value;
@@ -21,13 +22,15 @@ struct Program {
     #[clap(short,long)]
     verbose : bool,
     #[clap(short,long)]
+    env_file : Option<String>,
+    #[clap(short,long)]
     amqp_url : Option<String>,
     #[clap(long,parse(try_from_str=Self::try_into_duration))]
     timeout_warning : Option<Duration>,
     #[clap(long,parse(try_from_str=Self::try_into_duration))]
     timeout_terminate : Option<Duration>,
-    #[clap(short,long,default_value="skein_test")]
-    queue : String
+    #[clap(short,long)]
+    queue : Option<String>
 }
 
 impl Program {
@@ -75,6 +78,15 @@ impl Responder for WorkerContext {
 async fn main() -> Result<(), Box<dyn Error>> {
     let program = Program::parse();
 
+    match program.env_file {
+        Some(ref path) => {
+            dotenv::from_filename(path).ok();
+        },
+        None => {
+            dotenv().ok();
+        }
+    }
+
     SimpleLogger::new().with_level(
         if program.verbose {
             LevelFilter::Debug
@@ -85,7 +97,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ).init().unwrap();
 
     let amqp_url = program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string()));
-    let queue = program.queue;
+    let queue = program.queue.unwrap_or_else(|| env::var("AMQP_QUEUE").unwrap_or_else(|_| "skein_test".to_string()));
 
     let context = WorkerContext::default();
     let worker = Worker::new(

@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use clap::Clap;
+use dotenv::dotenv;
 use log::LevelFilter;
 use serde_json::json;
 use simple_logger::SimpleLogger;
@@ -19,18 +20,22 @@ struct Program {
     #[clap(short,long)]
     verbose : bool,
     #[clap(short,long)]
+    env_file : Option<String>,
+    #[clap(short,long)]
     amqp_url : Option<String>,
-    #[clap(short,long,default_value="skein_test")]
-    queue : String,
+    #[clap(short,long)]
+    queue : Option<String>,
     #[clap(short,long)]
     silent: bool,
     #[clap(short='t',long)]
     report: bool,
     #[clap(short,long,default_value="1")]
     repeat: usize,
+    #[clap(long)]
+    ident: Option<String>,
     #[clap(short,long,default_value="10",parse(try_from_str=Self::try_into_duration))]
     timeout : Duration,
-    method : Option<String>,
+    method : String,
     #[clap(multiple=true)]
     args : Vec<String>
 }
@@ -45,6 +50,15 @@ impl Program {
 async fn main() -> Result<(), Box<dyn Error>> {
     let program = Program::parse();
 
+    match program.env_file {
+        Some(ref path) => {
+            dotenv::from_filename(path).ok();
+        },
+        None => {
+            dotenv().ok();
+        }
+    }
+
     SimpleLogger::new().with_level(
         if program.verbose {
             LevelFilter::Debug
@@ -54,15 +68,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     ).init().unwrap();
 
-    let amqp_url = program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string()));
-    let queue = program.queue;
-
     let options = AMQPClientOptions::new(
-        amqp_url, queue, "amqp-client"
+        program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string())),
+        program.queue.unwrap_or_else(|| env::var("AMQP_QUEUE").unwrap_or_else(|_| "skein_test".to_string())),
+        program.ident.unwrap_or_else(|| "amqp-client".to_string())
     ).with_timeout(program.timeout);
 
+    // skein_test
+
     let client = AMQPClient::new(options).await?;
-    let method = program.method.unwrap_or_else(|| "echo".to_string());
+    let method = program.method;
     let params = Some(json!(program.args));
 
     let now = Instant::now();
