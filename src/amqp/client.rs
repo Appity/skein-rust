@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::time::Duration;
 
-use amq_protocol_types::ShortString;
 use async_trait::async_trait;
 use gethostname::gethostname;
 use lapin::{
@@ -99,7 +98,7 @@ impl Client {
     pub async fn new(options: ClientOptions) -> LapinResult<Client> {
         let connection = Connection::connect(
             options.amqp_url.as_str(),
-            ConnectionProperties::default().with_default_executor(8),
+            ConnectionProperties::default(),
         ).await?;
 
         let channel = connection.create_channel().await?;
@@ -150,7 +149,7 @@ impl Client {
 
         let handle = tokio::spawn(async move {
             let rpc_queue_name = rpc_queue_name.as_str();
-            let properties = BasicProperties::default().with_content_type(ShortString::from("application/json"));
+            let properties = BasicProperties::default().with_content_type("application/json".into());
 
             let mut requests = HashMap::<String,OneshotSender<rpc::Response>>::new();
 
@@ -163,7 +162,7 @@ impl Client {
                                     Ok(str) => {
                                         let payload = str.as_bytes().to_vec();
                                         let properties = if request.reply_to() {
-                                            properties.clone().with_reply_to(ShortString::from(reply_to.as_str()))
+                                            properties.clone().with_reply_to(reply_to.as_str().into())
                                         }
                                         else {
                                             properties.clone()
@@ -205,7 +204,7 @@ impl Client {
                     },
                     incoming = consumer.next() => {
                         match incoming {
-                            Some(Ok((channel, delivery))) => {
+                            Some(Ok(delivery)) => {
                                 match rpc::Response::try_from(&delivery) {
                                     Ok(response) => {
                                         match response.id() {

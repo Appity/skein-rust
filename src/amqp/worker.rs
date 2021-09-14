@@ -2,7 +2,6 @@ use futures::future::FutureExt;
 use futures::stream::StreamExt;
 use std::convert::TryFrom;
 
-use amq_protocol_types::ShortString;
 use lapin::{
     BasicProperties,
     options::*,
@@ -46,7 +45,7 @@ impl WorkerConfig {
     async fn channel(&self) -> LapinResult<Channel> {
         let connection = Connection::connect(
             self.amqp_addr.as_str(),
-            ConnectionProperties::default().with_default_executor(8),
+            ConnectionProperties::default(),
         ).await?;
 
         let channel = connection.create_channel().await?;
@@ -131,7 +130,7 @@ impl<C> Worker<C> where C : Responder {
                             Ok(mut consumer) => {
                                 loop {
                                     match consumer.next().await {
-                                        Some(Ok((channel, delivery))) => {
+                                        Some(Ok(delivery)) => {
                                             log::debug!("Dispatching RPC call");
 
                                             self.handle_with_timeout(&channel, &delivery).await;
@@ -190,7 +189,7 @@ impl<C> Worker<C> where C : Responder {
                             reply_to,
                             Default::default(),
                             payload,
-                            BasicProperties::default().with_content_type(ShortString::from("application/json"))
+                            BasicProperties::default().with_content_type("application/json".into())
                         ).await {
                             log::warn!("Error: Could not publish reply {:?}", err);
                         }
