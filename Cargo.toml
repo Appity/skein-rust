@@ -18,13 +18,14 @@ futures = { version = "0.3.17", features = [ "thread-pool" ] }
 gethostname = "*"
 hyper = "*"
 hyper-tls = "*"
-lapin = { version = "2.0.0-alpha.4" }
+lapin = { git = "https://github.com/CleverCloud/lapin.git" }
 lazy_static = "*"
 log = { version = "*" }
 serde = { version = "*", features = [ "derive" ] }
 serde_json = { version = "*", features = [ "preserve_order" ] }
 simple_logger = { version = "*" }
 tokio = { version = "1.10.1", features = [ "full" ] }
+tokio-amqp = { git = "https://github.com/CleverCloud/lapin.git" }
 time = "*"
 uuid = { version = "*", features = [ "serde", "v4" ] }
 url = "2.2.2"

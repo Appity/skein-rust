@@ -15,6 +15,7 @@ use lapin::{
     Result as LapinResult
 };
 use serde_json::Value;
+use tokio_amqp::*;
 use tokio::sync::mpsc::{unbounded_channel,UnboundedSender};
 use tokio::sync::oneshot::{channel as oneshot_channel,Sender as OneshotSender};
 use tokio::task::JoinHandle;
@@ -98,7 +99,7 @@ impl Client {
     pub async fn new(options: ClientOptions) -> LapinResult<Client> {
         let connection = Connection::connect(
             options.amqp_url.as_str(),
-            ConnectionProperties::default(),
+            ConnectionProperties::default().with_tokio(),
         ).await?;
 
         let channel = connection.create_channel().await?;
