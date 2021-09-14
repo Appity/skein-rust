@@ -17,4 +17,6 @@ RUN apt-get update && apt install libpq5 libssl1.1 -y
 COPY --from=builder /usr/local/cargo/bin/amqp-client /usr/local/bin/amqp-client
 COPY --from=builder /usr/local/cargo/bin/amqp-worker /usr/local/bin/amqp-worker
 
+WORKDIR /usr/local/bin
+
 CMD [ "/usr/local/bin/amqp-worker" ]
