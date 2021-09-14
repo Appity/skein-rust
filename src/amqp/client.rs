@@ -264,13 +264,13 @@ impl Client {
 impl ClientTrait for Client {
     async fn rpc_request_serialize<T>(&self, method: impl ToString + Send + 'async_trait, params: Option<impl Into<Value> + Send + 'async_trait>) -> Result<T, Box<dyn std::error::Error>> where T : From<Value> + Send + 'async_trait {
         let (reply, responder) = oneshot_channel::<rpc::Response>();
+        let method = method.to_string();
 
-        self.rpc.send(
-            (
-                rpc::Request::new_serialize(Uuid::new_v4().to_string(), method, params),
-                Some(reply)
-            )
-        ).unwrap();
+        let request = rpc::Request::new_serialize(Uuid::new_v4().to_string(), &method, params);
+
+        log::debug!("{}> RPC Request: {} (sent)", request.id(), &method);
+
+        self.rpc.send((request, Some(reply)))?;
 
         match timeout(self.options.timeout, responder).await?? {
             rpc::Response::Result { result, .. } => {
@@ -288,7 +288,7 @@ impl ClientTrait for Client {
 
         let request = rpc::Request::new(Uuid::new_v4().to_string(), &method, params);
 
-        log::debug!("{}> Request: {}", request.id(), &method);
+        log::debug!("{}> RPC Request: {} (sent)", request.id(), &method);
 
         self.rpc.send((request,Some(reply)))?;
 
@@ -307,7 +307,7 @@ impl ClientTrait for Client {
 
         let request = rpc::Request::new_noreply(Uuid::new_v4().to_string(), &method, params);
 
-        log::debug!("{}> Request: {}", request.id(), &method);
+        log::debug!("{}> RPC Request: {} (sent)", request.id(), &method);
 
         self.rpc.send((request,None))?;
 
