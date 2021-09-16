@@ -6,19 +6,18 @@ use std::time::Instant;
 
 use clap::Clap;
 use dotenv::dotenv;
-use log::LevelFilter;
 use serde_json::json;
-use simple_logger::SimpleLogger;
 
 use skein_rpc::Client;
 use skein_rpc::amqp::Client as AMQPClient;
 use skein_rpc::amqp::ClientOptions as AMQPClientOptions;
+use skein_rpc::logging;
 
 #[derive(Clap)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Program {
-    #[clap(short,long)]
-    verbose : bool,
+    #[clap(short, long, parse(from_occurrences))]
+    verbose: usize,
     #[clap(short,long)]
     env_file : Option<String>,
     #[clap(short,long)]
@@ -35,6 +34,8 @@ struct Program {
     ident: Option<String>,
     #[clap(short,long,default_value="10",parse(try_from_str=Self::try_into_duration))]
     timeout : Duration,
+    #[clap(long)]
+    noreply : bool,
     method : String,
     #[clap(multiple=true)]
     args : Vec<String>
@@ -59,14 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    SimpleLogger::new().with_level(
-        if program.verbose {
-            LevelFilter::Debug
-        }
-        else {
-            LevelFilter::Info
-        }
-    ).init().unwrap();
+    logging::setup(program.verbose);
 
     let options = AMQPClientOptions::new(
         program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string())),
@@ -82,18 +76,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let now = Instant::now();
 
-    for _ in 0..program.repeat {
-        match client.rpc_request(method.as_str(), params.clone()).await {
-            Ok(response) => {
-                if !program.silent {
-                    println!("{}", response.to_string());
+    if program.noreply {
+        for _ in 0..program.repeat {
+            match client.rpc_request_noreply(method.as_str(), params.clone()).await {
+                Ok(()) => { },
+                Err(err) => {
+                    log::error!("Error: {}", err);
                 }
-            }
-            Err(err) => {
-                log::error!("Error: {}", err);
             }
         }
     }
+    else {
+        for _ in 0..program.repeat {
+            match client.rpc_request(method.as_str(), params.clone()).await {
+                Ok(response) => {
+                    if !program.silent {
+                        println!("{}", response.to_string());
+                    }
+                },
+                Err(err) => {
+                    log::error!("Error: {}", err);
+                }
+            }
+        }
+    }
+
+    client.into_handle().await.ok();
 
     if program.report {
         let elapsed = now.elapsed().as_secs_f64();

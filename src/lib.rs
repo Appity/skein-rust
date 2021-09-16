@@ -7,6 +7,8 @@ pub mod amqp;
 mod client;
 pub use client::Client;
 
+pub mod logging;
+
 pub mod rpc;
 
 mod responder;

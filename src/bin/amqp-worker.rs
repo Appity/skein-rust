@@ -5,22 +5,21 @@ use std::num::ParseIntError;
 use async_trait::async_trait;
 use clap::Clap;
 use dotenv::dotenv;
-use log::LevelFilter;
 use serde_json::json;
 use serde_json::Value;
-use simple_logger::SimpleLogger;
 use tokio::time::sleep;
 use tokio::time::Duration;
 
 use skein_rpc::amqp::Worker;
+use skein_rpc::logging;
 use skein_rpc::Responder;
 use skein_rpc::rpc;
 
 #[derive(Clap)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Program {
-    #[clap(short,long)]
-    verbose : bool,
+    #[clap(short, long, parse(from_occurrences))]
+    verbose: usize,
     #[clap(short,long)]
     env_file : Option<String>,
     #[clap(short,long)]
@@ -87,14 +86,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    SimpleLogger::new().with_level(
-        if program.verbose {
-            LevelFilter::Debug
-        }
-        else {
-            LevelFilter::Info
-        }
-    ).init().unwrap();
+    logging::setup(program.verbose);
 
     let amqp_url = program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string()));
     let queue = program.queue.unwrap_or_else(|| env::var("AMQP_QUEUE").unwrap_or_else(|_| "skein_test".to_string()));

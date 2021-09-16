@@ -15,9 +15,10 @@ use lapin::{
     Result as LapinResult
 };
 use serde_json::Value;
-use tokio_amqp::*;
+use tokio_amqp::LapinTokioExt;
 use tokio::sync::mpsc::{unbounded_channel,UnboundedSender};
 use tokio::sync::oneshot::{channel as oneshot_channel,Sender as OneshotSender};
+// use tokio::task::JoinError;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -91,6 +92,7 @@ impl ClientOptions {
 #[derive(Debug)]
 pub struct Client {
     rpc: UnboundedSender<(rpc::Request, Option<OneshotSender<rpc::Response>>)>,
+    interrupt: OneshotSender<()>,
     options: ClientOptions,
     handle: JoinHandle<()>
 }
@@ -148,6 +150,8 @@ impl Client {
         let rpc_queue_name = queue_name.clone();
         let reply_to = ident.clone();
 
+        let (interrupt, mut interrupted) = oneshot_channel::<()>();
+
         let handle = tokio::spawn(async move {
             let rpc_queue_name = rpc_queue_name.as_str();
             let properties = BasicProperties::default().with_content_type("application/json".into());
@@ -155,6 +159,12 @@ impl Client {
             let mut requests = HashMap::<String,OneshotSender<rpc::Response>>::new();
 
             loop {
+                if let Ok(_) = interrupted.try_recv() {
+                    log::debug!("Client loop interrupted");
+
+                    break;
+                }
+
                 tokio::select!(
                     r = rx.recv() => {
                         match r {
@@ -176,9 +186,18 @@ impl Client {
                                             payload,
                                             properties
                                         ).await {
-                                            Ok(_) => {
-                                                if let Some(reply) = reply {
-                                                    requests.insert(request.id().clone(), reply);
+                                            Ok(confirm) => {
+                                                match confirm.await {
+                                                    Ok(_) => {
+                                                        log::trace!("Delivery published");
+
+                                                        if let Some(reply) = reply {
+                                                            requests.insert(request.id().clone(), reply);
+                                                        }
+                                                    },
+                                                    Err(err) => {
+                                                        log::error!("Error confirming request: {}", err);
+                                                    }
                                                 }
                                             },
                                             Err(err) => {
@@ -200,7 +219,11 @@ impl Client {
                                     }
                                 }
                             },
-                            None => break
+                            None => {
+                                log::debug!("Cannel closed, exiting client loop");
+
+                                break;
+                            }
                         }
                     },
                     incoming = consumer.next() => {
@@ -250,10 +273,15 @@ impl Client {
         Ok(
             Client {
                 rpc: tx,
+                interrupt,
                 options,
                 handle
             }
         )
+    }
+
+    pub fn into_handle(self) -> JoinHandle<()> {
+        self.handle
     }
 
     pub fn abort(self) {
