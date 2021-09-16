@@ -1,6 +1,6 @@
 [package]
 name = "skein-rpc"
-version = "0.5.0"
+version = "0.5.1"
 authors = [ "Scott Tadman <tadman@postageapp.com>" ]
 edition = "2018"
 
@@ -14,18 +14,19 @@ clap_derive = "=3.0.0-beta.2"
 chrono = { version = "*", features = [ "serde" ] }
 dotenv = "0.15.0"
 dotenv_codegen = "*"
+env_logger = "*"
 futures = { version = "0.3.17", features = [ "thread-pool" ] }
 gethostname = "*"
 hyper = "*"
 hyper-tls = "*"
-lapin = { git = "https://github.com/CleverCloud/lapin.git" }
+lapin = { git = "https://github.com/postageapp/lapin.git", branch = "fix/issue-348" }
 lazy_static = "*"
 log = { version = "*" }
 serde = { version = "*", features = [ "derive" ] }
 serde_json = { version = "*", features = [ "preserve_order" ] }
 simple_logger = { version = "*" }
 tokio = { version = "1.10.1", features = [ "full" ] }
-tokio-amqp = { git = "https://github.com/CleverCloud/lapin.git" }
+tokio-amqp = { git = "https://github.com/postageapp/lapin.git", branch = "fix/issue-348" }
 time = "*"
 uuid = { version = "*", features = [ "serde", "v4" ] }
 url = "2.2.2"
