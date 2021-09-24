@@ -1,6 +1,6 @@
 [package]
 name = "skein-rpc"
-version = "0.5.1"
+version = "0.5.2"
 authors = [ "Scott Tadman <tadman@postageapp.com>" ]
 edition = "2018"
 

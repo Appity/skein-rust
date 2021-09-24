@@ -10,16 +10,19 @@ use lapin::{
     BasicProperties,
     options::*,
     types::FieldTable,
+    Channel,
     Connection,
     ConnectionProperties,
+    Consumer,
     Result as LapinResult
 };
 use serde_json::Value;
 use tokio_amqp::LapinTokioExt;
-use tokio::sync::mpsc::{unbounded_channel,UnboundedSender};
-use tokio::sync::oneshot::{channel as oneshot_channel,Sender as OneshotSender};
+use tokio::sync::mpsc::{unbounded_channel,UnboundedReceiver,UnboundedSender};
+use tokio::sync::oneshot::{channel as oneshot_channel,Receiver as OneshotReceiver,Sender as OneshotSender};
 // use tokio::task::JoinError;
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -89,6 +92,210 @@ impl ClientOptions {
     }
 }
 
+async fn declare_queues(options: &ClientOptions, channel: &Channel, ident: &String) -> LapinResult<()> {
+    let queue_name = options.queue_name.to_string();
+
+    channel.queue_declare(
+        queue_name.as_str(),
+        QueueDeclareOptions {
+            passive: false,
+            durable: true,
+            exclusive: false,
+            auto_delete: false,
+            nowait: true
+        },
+        FieldTable::default()
+    ).await?;
+
+    channel.queue_declare(
+        ident.as_str(),
+        QueueDeclareOptions {
+            passive: false,
+            durable: false,
+            exclusive: true,
+            auto_delete: true,
+            nowait: true
+        },
+        FieldTable::default()
+    ).await?;
+
+    Ok(())
+}
+
+async fn create_consumer(loop_context: &ClientLoopContext) -> LapinResult<(Channel,Consumer)> {
+    let connection = connect(&loop_context.options).await?;
+    let channel = connection.create_channel().await?;
+
+    declare_queues(&loop_context.options, &channel, &loop_context.ident).await?;
+
+    let consumer = channel.basic_consume(
+        loop_context.ident.as_str(),
+        "",
+        BasicConsumeOptions::default(),
+        FieldTable::default()
+    ).await?;
+
+    Ok((channel, consumer))
+}
+
+async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_context: &mut ClientLoopContext) -> LapinResult<()> {
+    let properties = BasicProperties::default().with_content_type("application/json".into());
+    let rpc_queue_name = loop_context.options.queue_name.to_string();
+    let reply_to = loop_context.ident.clone();
+
+    loop {
+        if let Ok(_) = loop_context.interrupted.try_recv() {
+            log::debug!("Client loop interrupted");
+
+            break;
+        }
+
+        log::debug!("Client loop begins, connected to {}", rpc_queue_name);
+
+        tokio::select!(
+            r = loop_context.rx.recv() => {
+                match r {
+                    Some((request,reply)) => {
+                        match serde_json::to_string(&request) {
+                            Ok(str) => {
+                                let payload = str.as_bytes().to_vec();
+                                let properties = if request.reply_to() {
+                                    properties.clone().with_reply_to(reply_to.as_str().into())
+                                }
+                                else {
+                                    properties.clone()
+                                };
+
+                                match channel.basic_publish(
+                                    "", // FUTURE: Allow specifying exchange
+                                    rpc_queue_name.as_str(),
+                                    Default::default(),
+                                    payload,
+                                    properties
+                                ).await {
+                                    Ok(confirm) => {
+                                        confirm.await?;
+
+                                        log::trace!("Delivery published to {}", &rpc_queue_name);
+
+                                        if let Some(reply) = reply {
+                                            loop_context.requests.insert(request.id().clone(), reply);
+                                        }
+                                    },
+                                    Err(err) => {
+                                        log::error!("Error sending request: {}", err);
+
+                                        // FIX: Don't reply like this until it's a lost cause
+                                        // if let Some(reply) = reply {
+                                        //     reply.send(
+                                        //         rpc::Response::error_for(
+                                        //             &request,
+                                        //             -32603,
+                                        //             format!("Could not send request: {}", err),
+                                        //             None
+                                        //         )
+                                        //     ).ok();
+                                        // }
+
+                                        Err(err)?
+                                    }
+                                }
+                            },
+                            Err(err) => {
+                                log::error!("Error serializing request: {}", err);
+                            }
+                        }
+                    },
+                    None => {
+                        log::debug!("Cannel closed, exiting client loop");
+
+                        break;
+                    }
+                }
+            },
+            incoming = consumer.next() => {
+                match incoming {
+                    Some(Ok(delivery)) => {
+                        match rpc::Response::try_from(&delivery) {
+                            Ok(response) => {
+                                match response.id() {
+                                    Some(id) => {
+                                        match loop_context.requests.remove(id) {
+                                            Some(reply) => {
+                                                reply.send(response).ok();
+                                            },
+                                            None => {
+                                                // Unknown request.
+                                                log::warn!("Warning: Received response for unknown request {}", id);
+                                            }
+                                        }
+                                    },
+                                    None => {
+                                        log::error!("Error: {:?}", response);
+                                    }
+                                }
+                            },
+                            Err(err) => {
+                                log::error!("Error: {:?}", err);
+                            }
+                        }
+
+                        channel.basic_ack(
+                            delivery.delivery_tag,
+                            BasicAckOptions::default()
+                        ).map(|_| ()).await;
+                    },
+                    Some(Err(err)) => {
+                        log::error!("Error: {:?}", err);
+                    },
+                    None => {
+                        // break;
+                    }
+                }
+            }
+        )
+    }
+
+    Ok(())
+}
+
+struct ClientLoopContext {
+    ident: String,
+    options: ClientOptions,
+    interrupted: OneshotReceiver<()>,
+    rx: UnboundedReceiver<(rpc::Request, Option<OneshotSender<rpc::Response>>)>,
+    requests: HashMap::<String,OneshotSender<rpc::Response>>
+}
+
+async fn client_handle(mut loop_context: ClientLoopContext) -> LapinResult<JoinHandle<()>> {
+    Ok(tokio::spawn(async move {
+        loop {
+            match create_consumer(&loop_context).await {
+                Ok((channel, consumer)) => {
+                    match client_consumer_loop(channel, consumer, &mut loop_context).await {
+                        Ok(_) => break,
+                        Err(err) => {
+                            log::error!("Error in consumer loop: {}", err);
+                        }
+                    }
+                },
+                Err(err) => {
+                    log::error!("Error creating consumer: {}", err);
+                }
+            }
+
+            sleep(Duration::from_secs(5)).await;
+        }
+    }))
+}
+
+async fn connect(options: &ClientOptions) -> LapinResult<Connection> {
+    Connection::connect(
+        options.amqp_url.as_str(),
+        ConnectionProperties::default().with_tokio(),
+    ).await
+}
+
 #[derive(Debug)]
 pub struct Client {
     rpc: UnboundedSender<(rpc::Request, Option<OneshotSender<rpc::Response>>)>,
@@ -99,26 +306,6 @@ pub struct Client {
 
 impl Client {
     pub async fn new(options: ClientOptions) -> LapinResult<Client> {
-        let connection = Connection::connect(
-            options.amqp_url.as_str(),
-            ConnectionProperties::default().with_tokio(),
-        ).await?;
-
-        let channel = connection.create_channel().await?;
-        let queue_name = options.queue_name.to_string();
-
-        channel.queue_declare(
-            queue_name.as_str(),
-            QueueDeclareOptions {
-                passive: false,
-                durable: true,
-                exclusive: false,
-                auto_delete: false,
-                nowait: true
-            },
-            FieldTable::default()
-        ).await?;
-
         let ident = format!(
             "{}-{}@{}",
             options.ident.to_string(),
@@ -126,156 +313,24 @@ impl Client {
             gethostname().into_string().unwrap()
         );
 
-        channel.queue_declare(
-            ident.as_str(),
-            QueueDeclareOptions {
-                passive: false,
-                durable: false,
-                exclusive: false,
-                auto_delete: true,
-                nowait: true
-            },
-            FieldTable::default()
-        ).await?;
+        let (tx, rx) = unbounded_channel::<(rpc::Request, Option<OneshotSender<rpc::Response>>)>();
 
-        let mut consumer = channel.basic_consume(
-            ident.as_str(),
-            "",
-            BasicConsumeOptions::default(),
-            FieldTable::default()
-        ).await?;
+        let (interrupt, interrupted) = oneshot_channel::<()>();
 
-        let (tx, mut rx) = unbounded_channel::<(rpc::Request, Option<OneshotSender<rpc::Response>>)>();
-
-        let rpc_queue_name = queue_name.clone();
-        let reply_to = ident.clone();
-
-        let (interrupt, mut interrupted) = oneshot_channel::<()>();
-
-        let handle = tokio::spawn(async move {
-            let rpc_queue_name = rpc_queue_name.as_str();
-            let properties = BasicProperties::default().with_content_type("application/json".into());
-
-            let mut requests = HashMap::<String,OneshotSender<rpc::Response>>::new();
-
-            loop {
-                if let Ok(_) = interrupted.try_recv() {
-                    log::debug!("Client loop interrupted");
-
-                    break;
-                }
-
-                tokio::select!(
-                    r = rx.recv() => {
-                        match r {
-                            Some((request,reply)) => {
-                                match serde_json::to_string(&request) {
-                                    Ok(str) => {
-                                        let payload = str.as_bytes().to_vec();
-                                        let properties = if request.reply_to() {
-                                            properties.clone().with_reply_to(reply_to.as_str().into())
-                                        }
-                                        else {
-                                            properties.clone()
-                                        };
-
-                                        match channel.basic_publish(
-                                            "", // FUTURE: Allow specifying exchange
-                                            rpc_queue_name,
-                                            Default::default(),
-                                            payload,
-                                            properties
-                                        ).await {
-                                            Ok(confirm) => {
-                                                match confirm.await {
-                                                    Ok(_) => {
-                                                        log::trace!("Delivery published");
-
-                                                        if let Some(reply) = reply {
-                                                            requests.insert(request.id().clone(), reply);
-                                                        }
-                                                    },
-                                                    Err(err) => {
-                                                        log::error!("Error confirming request: {}", err);
-                                                    }
-                                                }
-                                            },
-                                            Err(err) => {
-                                                if let Some(reply) = reply {
-                                                    reply.send(
-                                                        rpc::Response::error_for(
-                                                            &request,
-                                                            -32603,
-                                                            format!("Could not send request: {}", err),
-                                                            None
-                                                        )
-                                                    ).ok();
-                                                }
-                                            }
-                                        }
-                                    },
-                                    Err(err) => {
-                                        log::error!("Error serializing request: {}", err);
-                                    }
-                                }
-                            },
-                            None => {
-                                log::debug!("Cannel closed, exiting client loop");
-
-                                break;
-                            }
-                        }
-                    },
-                    incoming = consumer.next() => {
-                        match incoming {
-                            Some(Ok(delivery)) => {
-                                match rpc::Response::try_from(&delivery) {
-                                    Ok(response) => {
-                                        match response.id() {
-                                            Some(id) => {
-                                                match requests.remove(id) {
-                                                    Some(reply) => {
-                                                        reply.send(response).ok();
-                                                    },
-                                                    None => {
-                                                        // Unknown request.
-                                                        log::warn!("Warning: Received response for unknown request {}", id);
-                                                    }
-                                                }
-                                            },
-                                            None => {
-                                                log::error!("Error: {:?}", response);
-                                            }
-                                        }
-                                    },
-                                    Err(err) => {
-                                        log::error!("Error: {:?}", err);
-                                    }
-                                }
-
-                                channel.basic_ack(
-                                    delivery.delivery_tag,
-                                    BasicAckOptions::default()
-                                ).map(|_| ()).await;
-                            },
-                            Some(Err(err)) => {
-                                log::error!("Error: {:?}", err);
-                            },
-                            None => {
-                                // break;
-                            }
-                        }
-                    }
-                )
-            }
-        });
+        let loop_context = ClientLoopContext {
+            ident,
+            options: options.clone(),
+            interrupted,
+            rx,
+            requests: HashMap::new()
+        };
 
         Ok(
             Client {
                 rpc: tx,
                 interrupt,
                 options,
-                handle
+                handle: client_handle(loop_context).await?
             }
         )
     }

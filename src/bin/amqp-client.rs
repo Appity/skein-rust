@@ -1,12 +1,13 @@
 use std::env;
 use std::error::Error;
-use std::num::ParseIntError;
+use std::num::ParseFloatError;
 use std::time::Duration;
 use std::time::Instant;
 
 use clap::Clap;
 use dotenv::dotenv;
 use serde_json::json;
+use tokio::time::sleep;
 
 use skein_rpc::Client;
 use skein_rpc::amqp::Client as AMQPClient;
@@ -30,6 +31,8 @@ struct Program {
     report: bool,
     #[clap(short,long,default_value="1")]
     repeat: usize,
+    #[clap(short,long,default_value="0",parse(try_from_str=Self::try_into_duration))]
+    repeat_delay: Duration,
     #[clap(long)]
     ident: Option<String>,
     #[clap(short,long,default_value="10",parse(try_from_str=Self::try_into_duration))]
@@ -42,8 +45,8 @@ struct Program {
 }
 
 impl Program {
-    fn try_into_duration(s: &str) -> Result<Duration, ParseIntError> {
-        s.parse().map(Duration::from_secs)
+    fn try_into_duration(s: &str) -> Result<Duration, ParseFloatError> {
+        s.parse().map(Duration::from_secs_f32)
     }
 }
 
@@ -76,18 +79,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let now = Instant::now();
 
+    let repeat = program.repeat;
+
+    let mut completed = 0;
+
     if program.noreply {
-        for _ in 0..program.repeat {
+        for _ in 0..repeat {
             match client.rpc_request_noreply(method.as_str(), params.clone()).await {
                 Ok(()) => { },
                 Err(err) => {
                     log::error!("Error: {}", err);
                 }
             }
+
+            completed += 1;
+
+            sleep(program.repeat_delay).await;
         }
     }
     else {
-        for _ in 0..program.repeat {
+        for _ in 0..repeat {
             match client.rpc_request(method.as_str(), params.clone()).await {
                 Ok(response) => {
                     if !program.silent {
@@ -98,6 +109,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     log::error!("Error: {}", err);
                 }
             }
+
+            completed += 1;
+
+            sleep(program.repeat_delay).await;
         }
     }
 
@@ -106,7 +121,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if program.report {
         let elapsed = now.elapsed().as_secs_f64();
 
-        log::info!("Completed {} request(s) in {:.2}s ({:.1}RPS)", program.repeat, elapsed, program.repeat as f64/elapsed);
+        log::info!("Completed {} request(s) in {:.2}s ({:.1}RPS)", completed, elapsed, completed as f64/elapsed);
     }
 
     Ok(())
