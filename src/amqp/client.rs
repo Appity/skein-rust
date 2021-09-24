@@ -145,12 +145,12 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
 
     loop {
         if let Ok(_) = loop_context.interrupted.try_recv() {
-            log::debug!("Client loop interrupted");
+            log::trace!("Client loop interrupted");
 
             break;
         }
 
-        log::debug!("Client loop begins, connected to {}", rpc_queue_name);
+        log::trace!("Client loop begins, connected to {}", rpc_queue_name);
 
         tokio::select!(
             r = loop_context.rx.recv() => {
@@ -207,7 +207,7 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                         }
                     },
                     None => {
-                        log::debug!("Cannel closed, exiting client loop");
+                        log::trace!("Cannel closed, exiting client loop");
 
                         break;
                     }
@@ -352,7 +352,7 @@ impl ClientTrait for Client {
 
         let request = rpc::Request::new_serialize(Uuid::new_v4().to_string(), &method, params);
 
-        log::debug!("{}> RPC Request: {} (sent)", request.id(), &method);
+        log::trace!("{}> RPC Request: {} (sent)", request.id(), &method);
 
         self.rpc.send((request, Some(reply)))?;
 
@@ -372,7 +372,7 @@ impl ClientTrait for Client {
 
         let request = rpc::Request::new(Uuid::new_v4().to_string(), &method, params);
 
-        log::debug!("{}> RPC Request: {} (sent)", request.id(), &method);
+        log::trace!("{}> RPC Request: {} (sent)", request.id(), &method);
 
         self.rpc.send((request,Some(reply)))?;
 
@@ -391,7 +391,7 @@ impl ClientTrait for Client {
 
         let request = rpc::Request::new_noreply(Uuid::new_v4().to_string(), &method, params);
 
-        log::debug!("{}> RPC Request: {} (sent)", request.id(), &method);
+        log::trace!("{}> RPC Request: {} (sent)", request.id(), &method);
 
         self.rpc.send((request,None))?;
 

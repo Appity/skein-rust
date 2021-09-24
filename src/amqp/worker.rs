@@ -98,7 +98,7 @@ impl<C> Worker<C> where C : Responder {
                     BasicAckOptions::default()
                 ).map(|_| ()).await;
 
-                log::debug!("RPC call processed in {:.2}s", now.elapsed().as_secs_f32());
+                log::trace!("RPC call processed in {:.2}s", now.elapsed().as_secs_f32());
             },
             Err(err) => {
                 log::error!("Timeout error when processing RPC call: {}", err);
@@ -108,7 +108,7 @@ impl<C> Worker<C> where C : Responder {
                     BasicNackOptions::default()
                 ).map(|_| ()).await;
 
-                log::debug!("RPC call failed in {:.2}s", now.elapsed().as_secs_f32());
+                log::trace!("RPC call failed in {:.2}s", now.elapsed().as_secs_f32());
             }
         }
     }
@@ -131,7 +131,7 @@ impl<C> Worker<C> where C : Responder {
                                 loop {
                                     match consumer.next().await {
                                         Some(Ok(delivery)) => {
-                                            log::debug!("Dispatching RPC call");
+                                            log::trace!("Dispatching RPC call");
 
                                             self.handle_with_timeout(&channel, &delivery).await;
                                         },
@@ -149,7 +149,7 @@ impl<C> Worker<C> where C : Responder {
                                     }
 
                                     if self.context.terminated() {
-                                        log::debug!("Worker terminated by request");
+                                        log::trace!("Worker terminated by request");
 
                                         return Ok(self);
                                     }
@@ -208,7 +208,7 @@ impl<C> Worker<C> where C : Responder {
     async fn handle_rpc_delivery(&mut self, delivery: &Delivery) -> rpc::Response {
         match rpc::Request::try_from(delivery) {
             Ok(request) => {
-                log::debug!("Request received: {}", request.id());
+                log::trace!("Request received: {}", request.id());
 
                 match self.context.respond(&request).await {
                     Ok(result) => {
