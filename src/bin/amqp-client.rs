@@ -85,14 +85,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if program.noreply {
         for _ in 0..repeat {
-            match client.rpc_request_noreply(method.as_str(), params.clone()).await {
+            match client.rpc_request_inject(method.as_str(), params.clone()).await {
                 Ok(()) => { },
                 Err(err) => {
-                    log::error!("Error: {}", err);
+                    log::error!("Error with request: {}", err);
                 }
             }
 
             completed += 1;
+
+            log::debug!("Sent {}/{}", completed, repeat);
 
             sleep(program.repeat_delay).await;
         }
@@ -106,17 +108,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 },
                 Err(err) => {
-                    log::error!("Error: {}", err);
+                    log::error!("Error sending request: {}", err);
                 }
             }
 
             completed += 1;
 
+            log::debug!("Sent {}/{}", completed, repeat);
+
             sleep(program.repeat_delay).await;
         }
     }
 
-    client.into_handle().await.ok();
+    log::debug!("Run complete, cleaning up client.");
+
+    client.close();
+
+    client.into_handle().await.unwrap();
 
     if program.report {
         let elapsed = now.elapsed().as_secs_f64();

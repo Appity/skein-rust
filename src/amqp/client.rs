@@ -7,7 +7,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use gethostname::gethostname;
 use lapin::{
-    BasicProperties,
     options::*,
     types::FieldTable,
     Channel,
@@ -19,8 +18,7 @@ use lapin::{
 use serde_json::Value;
 use tokio_amqp::LapinTokioExt;
 use tokio::sync::mpsc::{unbounded_channel,UnboundedReceiver,UnboundedSender};
-use tokio::sync::oneshot::{channel as oneshot_channel,Receiver as OneshotReceiver,Sender as OneshotSender};
-// use tokio::task::JoinError;
+use tokio::sync::oneshot::{channel as oneshot_channel,Sender as OneshotSender};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::time::timeout;
@@ -139,65 +137,42 @@ async fn create_consumer(loop_context: &ClientLoopContext) -> LapinResult<(Chann
 }
 
 async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_context: &mut ClientLoopContext) -> LapinResult<()> {
-    let properties = BasicProperties::default().with_content_type("application/json".into());
     let rpc_queue_name = loop_context.options.queue_name.to_string();
     let reply_to = loop_context.ident.clone();
 
     loop {
-        if let Ok(_) = loop_context.interrupted.try_recv() {
-            log::trace!("Client loop interrupted");
-
-            break;
-        }
-
-        log::trace!("Client loop begins, connected to {}", rpc_queue_name);
-
         tokio::select!(
             r = loop_context.rx.recv() => {
                 match r {
-                    Some((request,reply)) => {
+                    Some(ClientCommand::Request(request,reply)) => {
                         match serde_json::to_string(&request) {
                             Ok(str) => {
-                                let payload = str.as_bytes().to_vec();
-                                let properties = if request.reply_to() {
-                                    properties.clone().with_reply_to(reply_to.as_str().into())
-                                }
-                                else {
-                                    properties.clone()
-                                };
-
                                 match channel.basic_publish(
                                     "", // FUTURE: Allow specifying exchange
                                     rpc_queue_name.as_str(),
                                     Default::default(),
-                                    payload,
-                                    properties
+                                    str.as_bytes().to_vec(),
+                                    request.properties(reply_to.as_str())
                                 ).await {
                                     Ok(confirm) => {
-                                        confirm.await?;
+                                        if let Err(err) = confirm.await {
+                                            if let Err(err) = loop_context.tx.send(ClientCommand::Request(request,reply)) {
+                                                log::error!("Error requeueing message: {}", err);
+                                            }
+
+                                            return Err(err);
+                                        }
 
                                         log::trace!("Delivery published to {}", &rpc_queue_name);
 
-                                        if let Some(reply) = reply {
-                                            loop_context.requests.insert(request.id().clone(), reply);
-                                        }
+                                        loop_context.requests.insert(request.id().clone(), reply);
                                     },
                                     Err(err) => {
-                                        log::error!("Error sending request: {}", err);
+                                        if let Err(err) = loop_context.tx.send(ClientCommand::Request(request,reply)) {
+                                            log::error!("Error requeueing message: {}", err);
+                                        }
 
-                                        // FIX: Don't reply like this until it's a lost cause
-                                        // if let Some(reply) = reply {
-                                        //     reply.send(
-                                        //         rpc::Response::error_for(
-                                        //             &request,
-                                        //             -32603,
-                                        //             format!("Could not send request: {}", err),
-                                        //             None
-                                        //         )
-                                        //     ).ok();
-                                        // }
-
-                                        Err(err)?
+                                        return Err(err);
                                     }
                                 }
                             },
@@ -206,8 +181,48 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                             }
                         }
                     },
+                    Some(ClientCommand::Inject(request)) => {
+                        match serde_json::to_string(&request) {
+                            Ok(str) => {
+                                match channel.basic_publish(
+                                    "", // FUTURE: Allow specifying exchange
+                                    rpc_queue_name.as_str(),
+                                    Default::default(),
+                                    str.as_bytes().to_vec(),
+                                    request.properties(reply_to.as_str())
+                                ).await {
+                                    Ok(confirm) => {
+                                        if let Err(err) = confirm.await {
+                                            if let Err(err) = loop_context.tx.send(ClientCommand::Inject(request)) {
+                                                log::error!("Error requeueing message: {}", err);
+                                            }
+
+                                            return Err(err);
+                                        }
+
+                                        log::trace!("Delivery published to {}", &rpc_queue_name);
+                                    },
+                                    Err(err) => {
+                                        if let Err(err) = loop_context.tx.send(ClientCommand::Inject(request)) {
+                                            log::error!("Error requeueing message: {}", err);
+                                        }
+
+                                        return Err(err);
+                                    }
+                                }
+                            },
+                            Err(err) => {
+                                log::error!("Error serializing request: {}", err);
+                            }
+                        }
+                    },
+                    Some(ClientCommand::Terminate) => {
+                        log::trace!("Client terminated, exiting client loop");
+
+                        return Ok(());
+                    },
                     None => {
-                        log::trace!("Cannel closed, exiting client loop");
+                        log::trace!("Channel closed, exiting client loop");
 
                         break;
                     }
@@ -231,12 +246,12 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                         }
                                     },
                                     None => {
-                                        log::error!("Error: {:?}", response);
+                                        log::error!("Missing ID error: {:?}", response);
                                     }
                                 }
                             },
                             Err(err) => {
-                                log::error!("Error: {:?}", err);
+                                log::error!("Error creating Response from Delivery: {:?}", err);
                             }
                         }
 
@@ -246,9 +261,13 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                         ).map(|_| ()).await;
                     },
                     Some(Err(err)) => {
-                        log::error!("Error: {:?}", err);
+                        return Err(err);
                     },
                     None => {
+                        log::debug!("Consumer channel closed");
+                        // Consumer has been closed, but don't break out of
+                        // loop until all of the backlog has cleared.
+
                         // break;
                     }
                 }
@@ -262,14 +281,16 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
 struct ClientLoopContext {
     ident: String,
     options: ClientOptions,
-    interrupted: OneshotReceiver<()>,
-    rx: UnboundedReceiver<(rpc::Request, Option<OneshotSender<rpc::Response>>)>,
+    tx: UnboundedSender<ClientCommand>,
+    rx: UnboundedReceiver<ClientCommand>,
     requests: HashMap::<String,OneshotSender<rpc::Response>>
 }
 
 async fn client_handle(mut loop_context: ClientLoopContext) -> LapinResult<JoinHandle<()>> {
     Ok(tokio::spawn(async move {
         loop {
+            log::trace!("Creating connection and consumer");
+
             match create_consumer(&loop_context).await {
                 Ok((channel, consumer)) => {
                     match client_consumer_loop(channel, consumer, &mut loop_context).await {
@@ -284,7 +305,7 @@ async fn client_handle(mut loop_context: ClientLoopContext) -> LapinResult<JoinH
                 }
             }
 
-            sleep(Duration::from_secs(5)).await;
+            sleep(Duration::from_secs(1)).await;
         }
     }))
 }
@@ -297,9 +318,15 @@ async fn connect(options: &ClientOptions) -> LapinResult<Connection> {
 }
 
 #[derive(Debug)]
+enum ClientCommand {
+    Request(rpc::Request,OneshotSender<rpc::Response>),
+    Inject(rpc::Request),
+    Terminate
+}
+
+#[derive(Debug)]
 pub struct Client {
-    rpc: UnboundedSender<(rpc::Request, Option<OneshotSender<rpc::Response>>)>,
-    interrupt: OneshotSender<()>,
+    rpc: UnboundedSender<ClientCommand>,
     options: ClientOptions,
     handle: JoinHandle<()>
 }
@@ -313,14 +340,12 @@ impl Client {
             gethostname().into_string().unwrap()
         );
 
-        let (tx, rx) = unbounded_channel::<(rpc::Request, Option<OneshotSender<rpc::Response>>)>();
-
-        let (interrupt, interrupted) = oneshot_channel::<()>();
+        let (tx, rx) = unbounded_channel::<ClientCommand>();
 
         let loop_context = ClientLoopContext {
             ident,
             options: options.clone(),
-            interrupted,
+            tx: tx.clone(),
             rx,
             requests: HashMap::new()
         };
@@ -328,7 +353,6 @@ impl Client {
         Ok(
             Client {
                 rpc: tx,
-                interrupt,
                 options,
                 handle: client_handle(loop_context).await?
             }
@@ -342,6 +366,10 @@ impl Client {
     pub fn abort(self) {
         self.handle.abort()
     }
+
+    pub fn close(&self) -> bool {
+        self.rpc.send(ClientCommand::Terminate).is_ok()
+    }
 }
 
 #[async_trait]
@@ -354,7 +382,7 @@ impl ClientTrait for Client {
 
         log::trace!("{}> RPC Request: {} (sent)", request.id(), &method);
 
-        self.rpc.send((request, Some(reply)))?;
+        self.rpc.send(ClientCommand::Request(request, reply))?;
 
         match timeout(self.options.timeout, responder).await?? {
             rpc::Response::Result { result, .. } => {
@@ -374,7 +402,7 @@ impl ClientTrait for Client {
 
         log::trace!("{}> RPC Request: {} (sent)", request.id(), &method);
 
-        self.rpc.send((request,Some(reply)))?;
+        self.rpc.send(ClientCommand::Request(request, reply))?;
 
         match timeout(self.options.timeout, responder).await?? {
             rpc::Response::Result { result, .. } => {
@@ -386,14 +414,14 @@ impl ClientTrait for Client {
         }
     }
 
-    async fn rpc_request_noreply(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> Result<(), Box<dyn std::error::Error>> {
+    async fn rpc_request_inject(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> Result<(), Box<dyn std::error::Error>> {
         let method = method.to_string();
 
         let request = rpc::Request::new_noreply(Uuid::new_v4().to_string(), &method, params);
 
         log::trace!("{}> RPC Request: {} (sent)", request.id(), &method);
 
-        self.rpc.send((request,None))?;
+        self.rpc.send(ClientCommand::Inject(request))?;
 
         Ok(())
     }

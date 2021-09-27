@@ -1,6 +1,7 @@
 use std::convert::TryFrom;
 use std::fmt::{self,Display};
 
+use lapin::BasicProperties;
 use lapin::message::Delivery;
 use serde::{Serialize, Deserialize};
 use serde_json::json;
@@ -58,6 +59,17 @@ impl Request {
 
     pub fn reply_to(&self) -> bool {
         self.reply_to
+    }
+
+    pub fn properties(&self, reply_to: &str) -> BasicProperties {
+        let properties = BasicProperties::default().with_content_type("application/json".into());
+
+        if self.reply_to() {
+            properties.with_reply_to(reply_to.into())
+        }
+        else {
+            properties
+        }
     }
 }
 
