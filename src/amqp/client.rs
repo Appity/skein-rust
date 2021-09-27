@@ -125,7 +125,13 @@ async fn create_consumer(loop_context: &ClientLoopContext) -> LapinResult<(Chann
     let connection = connect(&loop_context.options).await?;
     let channel = connection.create_channel().await?;
 
+    // let consumer_connection = connect(&loop_context.options).await?;
+    // let consumer_channel = consumer_connection.create_channel().await?;
+
+    // declare_queues(&loop_context.options, &consumer_channel, &loop_context.ident).await?;
     declare_queues(&loop_context.options, &channel, &loop_context.ident).await?;
+
+    channel.confirm_select(ConfirmSelectOptions{ nowait: false }).await?;
 
     let consumer = channel.basic_consume(
         loop_context.ident.as_str(),
