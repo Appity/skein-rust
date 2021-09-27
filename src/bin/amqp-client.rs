@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             completed += 1;
 
-            log::debug!("Sent {}/{}", completed, repeat);
+            log::debug!("confirmations {}/{}", completed, repeat);
 
             sleep(program.repeat_delay).await;
         }
@@ -149,9 +149,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     log::info!(
-        "Client report: connections={}, sent={}, retried={}, pending={}",
+        "Client report: connections={}, confirmations={}, retried={}, pending={}",
         report.connections,
-        report.sent,
+        report.confirmations,
         report.retried,
         report.pending
     );
