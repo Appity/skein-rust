@@ -155,9 +155,14 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                     request.properties(reply_to.as_str())
                                 ).await {
                                     Ok(confirm) => {
+                                        log::trace!("{}> Awaiting confirmation", request.id());
+
                                         if let Err(err) = confirm.await {
                                             if let Err(err) = loop_context.tx.send(ClientCommand::Request(request,reply)) {
                                                 log::error!("Error requeueing message: {}", err);
+                                            }
+                                            else {
+                                                loop_context.resent += 1;
                                             }
 
                                             return Err(err);
@@ -172,6 +177,9 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                     Err(err) => {
                                         if let Err(err) = loop_context.tx.send(ClientCommand::Request(request,reply)) {
                                             log::error!("Error requeueing message: {}", err);
+                                        }
+                                        else {
+                                            loop_context.resent += 1;
                                         }
 
                                         return Err(err);
@@ -196,9 +204,14 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                     request.properties(reply_to.as_str())
                                 ).await {
                                     Ok(confirm) => {
+                                        log::trace!("{}> Awaiting confirmation", request.id());
+
                                         if let Err(err) = confirm.await {
                                             if let Err(err) = loop_context.tx.send(ClientCommand::Inject(request,response)) {
                                                 log::error!("Error requeueing message: {}", err);
+                                            }
+                                            else {
+                                                loop_context.resent += 1;
                                             }
 
                                             return Err(err);
@@ -209,7 +222,7 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                         log::trace!("{}> Delivery {} published to {}", request.id(), &loop_context.sent, &rpc_queue_name);
 
                                         if let Err(_) = response.send(()) {
-                                            // Sender may have gone away, so consider demoting this to trace.
+                                            // NOTE: Sender may have gone away, so consider demoting this to trace.
                                             log::error!("{}> Error confirming delivery", request.id());
                                         }
                                     },
@@ -217,7 +230,9 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                         if let Err(err) = loop_context.tx.send(ClientCommand::Inject(request,response)) {
                                             log::error!("Error requeueing message: {}", err);
                                         }
-                                        log::info!("RQ");
+                                        else {
+                                            loop_context.resent += 1;
+                                        }
 
                                         return Err(err);
                                     }
@@ -294,12 +309,20 @@ struct ClientLoopContext {
     ident: String,
     options: ClientOptions,
     sent: usize,
+    resent: usize,
     tx: UnboundedSender<ClientCommand>,
     rx: UnboundedReceiver<ClientCommand>,
     requests: HashMap::<String,OneshotSender<rpc::Response>>
 }
 
-async fn client_handle(mut loop_context: ClientLoopContext) -> LapinResult<JoinHandle<()>> {
+#[derive(Clone,Debug)]
+pub struct ClientReport {
+    pub sent: usize,
+    pub resent: usize,
+    pub pending: usize
+}
+
+async fn client_handle(mut loop_context: ClientLoopContext) -> LapinResult<JoinHandle<ClientReport>> {
     Ok(tokio::spawn(async move {
         loop {
             log::trace!("Creating connection and consumer");
@@ -319,6 +342,12 @@ async fn client_handle(mut loop_context: ClientLoopContext) -> LapinResult<JoinH
             }
 
             sleep(Duration::from_secs(1)).await;
+        }
+
+        ClientReport {
+            sent: loop_context.sent,
+            resent: loop_context.resent,
+            pending: loop_context.requests.len()
         }
     }))
 }
@@ -341,7 +370,7 @@ enum ClientCommand {
 pub struct Client {
     rpc: UnboundedSender<ClientCommand>,
     options: ClientOptions,
-    handle: JoinHandle<()>
+    handle: JoinHandle<ClientReport>
 }
 
 impl Client {
@@ -359,6 +388,7 @@ impl Client {
             ident,
             options: options.clone(),
             sent: 0,
+            resent: 0,
             tx: tx.clone(),
             rx,
             requests: HashMap::new()
@@ -373,7 +403,7 @@ impl Client {
         )
     }
 
-    pub fn into_handle(self) -> JoinHandle<()> {
+    pub fn into_handle(self) -> JoinHandle<ClientReport> {
         self.handle
     }
 

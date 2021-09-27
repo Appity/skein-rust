@@ -140,13 +140,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     client.close();
 
-    client.into_handle().await.unwrap();
+    let report = client.into_handle().await.unwrap();
 
     if program.report {
         let elapsed = now.elapsed().as_secs_f64();
 
         log::info!("Completed {} request(s) in {:.2}s ({:.1}RPS)", completed, elapsed, completed as f64/elapsed);
     }
+
+    log::info!("Client report: sent={}, resent={}, pending={}", report.sent, report.resent, report.pending);
 
     Ok(())
 }
