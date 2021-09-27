@@ -12,6 +12,7 @@ use lapin::{
     ConnectionProperties,
     Result as LapinResult
 };
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -68,17 +69,30 @@ impl WorkerConfig {
 
 pub struct Worker<C> where C : Responder {
     context: C,
+    terminated: mpsc::Receiver<()>,
     config: WorkerConfig
 }
 
 impl<C> Worker<C> where C : Responder {
-    pub fn new(context: C, amqp_addr: impl ToString, queue_name: impl ToString, timeout_warning: Option<Duration>, timeout_terminate: Option<Duration>) -> LapinResult<Worker<C>> {
-        Ok(
+    pub fn new(context: C, amqp_addr: impl ToString, queue_name: impl ToString, timeout_warning: Option<Duration>, timeout_terminate: Option<Duration>) -> LapinResult<(Worker<C>,mpsc::Sender<()>)> {
+        let (terminator, terminated) = mpsc::channel(8);
+
+        Ok((
             Worker {
                 context,
+                terminated,
                 config: WorkerConfig::new(amqp_addr, queue_name, timeout_warning, timeout_terminate)
-            }
-        )
+            },
+            terminator
+        ))
+    }
+
+    pub fn context(&self) -> &C {
+        &self.context
+    }
+
+    pub fn context_mut(&mut self) -> &mut C {
+        &mut self.context
     }
 
     pub fn queue_name(&self) -> &str {
@@ -129,36 +143,39 @@ impl<C> Worker<C> where C : Responder {
                         ).await {
                             Ok(mut consumer) => {
                                 loop {
-                                    match consumer.next().await {
-                                        Some(Ok(delivery)) => {
-                                            log::trace!("Dispatching RPC call");
+                                    tokio::select!(
+                                        _ = self.terminated.recv() => {
+                                            log::trace!("Worker terminated by request.");
 
-                                            self.handle_with_timeout(&channel, &delivery).await;
+                                            return Ok(self);
                                         },
-                                        Some(Err(err)) => {
-                                            log::error!("Error: {:?}", err);
-                                            log::warn!("AMQP consumer reconnecting.");
+                                        message = consumer.next() => {
+                                            match message {
+                                                Some(Ok(delivery)) => {
+                                                    log::trace!("Dispatching RPC call");
 
-                                            break;
-                                        },
-                                        None => {
-                                            log::warn!("AMQP consumer ran dry? Reconnecting.");
+                                                    self.handle_with_timeout(&channel, &delivery).await;
+                                                },
+                                                Some(Err(err)) => {
+                                                    log::error!("Error: {:?}", err);
+                                                    log::warn!("AMQP consumer reconnecting.");
 
-                                            break;
+                                                    break;
+                                                },
+                                                None => {
+                                                    log::warn!("AMQP consumer ran dry? Reconnecting.");
+
+                                                    break;
+                                                }
+                                            }
                                         }
-                                    }
-
-                                    if self.context.terminated() {
-                                        log::trace!("Worker terminated by request");
-
-                                        return Ok(self);
-                                    }
+                                    )
                                 }
                             },
                             Err(err) => {
                                 log::error!("Error connecting consumer: {}", err);
 
-                                sleep(Duration::from_secs(5)).await;
+                                sleep(Duration::from_secs(1)).await;
 
                                 log::warn!("AMQP consumer reconnecting.");
                             }
@@ -167,7 +184,7 @@ impl<C> Worker<C> where C : Responder {
                     Err(err) => {
                         log::error!("Error connecting channel: {}", err);
 
-                        sleep(Duration::from_secs(5)).await;
+                        sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -248,10 +265,6 @@ mod test {
 
             Ok(json!(format!("Example {}", &self.id)))
         }
-
-        fn terminated(&self) -> bool {
-            self.terminated
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads=2)]
@@ -261,9 +274,7 @@ mod test {
             terminated: false
         };
 
-        // /context: C, amqp_addr: S, queue_name: S)
-
-        let worker = Worker::new(
+        let (worker, terminator) = Worker::new(
             context,
             env::var("AMQP_URL").unwrap_or("amqp://localhost:5672/%2f".to_string()),
             "test",
@@ -271,6 +282,12 @@ mod test {
             None
         ).unwrap();
 
-        worker.run().abort();
+        let handle = worker.run();
+
+        terminator.send(()).await.unwrap();
+
+        let worker = handle.await.unwrap().unwrap();
+
+        assert_eq!(worker.queue_name(), "test");
     }
 }

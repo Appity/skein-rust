@@ -39,13 +39,13 @@ impl Program {
 }
 
 struct WorkerContext {
-    terminated : bool
+    handler_count: usize
 }
 
-impl Default for WorkerContext {
-    fn default() -> Self {
+impl WorkerContext {
+    fn new() -> Self {
         Self {
-            terminated: false
+            handler_count: 0
         }
     }
 }
@@ -55,6 +55,8 @@ impl Responder for WorkerContext {
     async fn respond(&mut self, request: &rpc::Request) -> Result<Value,Box<dyn Error>> {
         match request.method().as_str() {
             "echo" => {
+                self.handler_count += 1;
+
                 Ok(request.params().cloned().unwrap_or(json!(null)))
             },
             "stall" => {
@@ -66,10 +68,6 @@ impl Responder for WorkerContext {
                 Err(Box::new(rpc::ErrorResponse::new(-32601, "Method not found", None)))
             }
         }
-    }
-
-    fn terminated(&self) -> bool {
-        self.terminated
     }
 }
 
@@ -91,8 +89,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let amqp_url = program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string()));
     let queue = program.queue.unwrap_or_else(|| env::var("AMQP_QUEUE").unwrap_or_else(|_| "skein_test".to_string()));
 
-    let context = WorkerContext::default();
-    let worker = Worker::new(
+    let context = WorkerContext::new();
+
+    let (worker, terminator) = Worker::new(
         context,
         amqp_url,
         queue,
@@ -100,7 +99,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         program.timeout_terminate
     )?;
 
-    worker.run().await??;
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.expect("Couldn't bind to CTRL-C handler.");
+
+        terminator.send(()).await.expect("Couldn't send interrupt signal.");
+
+        log::info!("Interrupted.");
+    });
+
+    let worker = worker.run().await??;
+
+    log::info!("Handled {} message(s)", worker.context().handler_count);
 
     Ok(())
 }
