@@ -167,7 +167,7 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                         ClientCommand::Inject(request, reply) => {
                             log::trace!("{}> Delivery {} published to {}", request.id(), &loop_context.confirmations, &rpc_queue_name);
 
-                            if let Err(_) = reply.send(()) {
+                            if let Err(_) = reply.send(request.id().clone()) {
                                 log::error!("{}> Error sending reply", request.id());
                             }
                         },
@@ -182,6 +182,8 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                     Some(ClientCommand::Request(request,reply)) => {
                         match serde_json::to_string(&request) {
                             Ok(str) => {
+                                log::trace!("{}> Publishing", request.id());
+
                                 match channel.basic_publish(
                                     "", // FUTURE: Allow specifying exchange
                                     rpc_queue_name.as_str(),
@@ -377,7 +379,7 @@ async fn connect(options: &ClientOptions) -> LapinResult<Connection> {
 #[derive(Debug)]
 enum ClientCommand {
     Request(rpc::Request,OneshotSender<rpc::Response>),
-    Inject(rpc::Request,OneshotSender<()>),
+    Inject(rpc::Request,OneshotSender<String>),
     Terminate
 }
 
@@ -477,20 +479,18 @@ impl ClientTrait for Client {
         }
     }
 
-    async fn rpc_request_inject(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> Result<(), Box<dyn std::error::Error>> {
+    async fn rpc_request_inject(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> Result<String, Box<dyn std::error::Error>> {
         let method = method.to_string();
 
         let request = rpc::Request::new_noreply(Uuid::new_v4().to_string(), &method, params);
 
         log::trace!("{}> RPC Request: {} (confirmations)", request.id(), &method);
 
-        let (reply, responder) = oneshot_channel::<()>();
+        let (reply, responder) = oneshot_channel::<String>();
 
         self.rpc.send(ClientCommand::Inject(request,reply))?;
 
-        responder.await?;
-
-        Ok(())
+        Ok(responder.await?)
     }
 }
 

@@ -1,5 +1,7 @@
 use std::env;
 use std::error::Error;
+use std::fs::File;
+use std::io::Write;
 use std::num::ParseIntError;
 
 use async_trait::async_trait;
@@ -20,6 +22,8 @@ use skein_rpc::rpc;
 struct Program {
     #[clap(short, long, parse(from_occurrences))]
     verbose: usize,
+    #[clap(long)]
+    receipt_log : Option<String>,
     #[clap(short,long)]
     env_file : Option<String>,
     #[clap(short,long)]
@@ -39,13 +43,15 @@ impl Program {
 }
 
 struct WorkerContext {
-    handler_count: usize
+    handler_count: usize,
+    receipt_log: Option<File>
 }
 
 impl WorkerContext {
-    fn new() -> Self {
+    fn new(receipt_log: Option<String>) -> Self {
         Self {
-            handler_count: 0
+            handler_count: 0,
+            receipt_log: receipt_log.map(|path| File::create(path.as_str()).unwrap())
         }
     }
 }
@@ -53,6 +59,10 @@ impl WorkerContext {
 #[async_trait]
 impl Responder for WorkerContext {
     async fn respond(&mut self, request: &rpc::Request) -> Result<Value,Box<dyn Error>> {
+        if let Some(ref mut log) = &mut self.receipt_log {
+            log.write_all(format!("{}\n", request.id()).as_bytes()).unwrap();
+        }
+
         match request.method().as_str() {
             "echo" => {
                 self.handler_count += 1;
@@ -89,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let amqp_url = program.amqp_url.unwrap_or_else(|| env::var("AMQP_URL").unwrap_or_else(|_| "amqp://localhost:5672/%2f".to_string()));
     let queue = program.queue.unwrap_or_else(|| env::var("AMQP_QUEUE").unwrap_or_else(|_| "skein_test".to_string()));
 
-    let context = WorkerContext::new();
+    let context = WorkerContext::new(program.receipt_log);
 
     let (worker, terminator) = Worker::new(
         context,

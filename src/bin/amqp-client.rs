@@ -1,5 +1,7 @@
 use std::env;
 use std::error::Error;
+use std::fs::File;
+use std::io::Write;
 use std::num::ParseFloatError;
 use std::time::Duration;
 use std::time::Instant;
@@ -19,6 +21,8 @@ use skein_rpc::logging;
 struct Program {
     #[clap(short, long, parse(from_occurrences))]
     verbose: usize,
+    #[clap(long)]
+    receipt_log : Option<String>,
     #[clap(short,long)]
     env_file : Option<String>,
     #[clap(short,long)]
@@ -85,6 +89,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut completed = 0;
 
+    let mut receipt_log = program.receipt_log.map(|path| File::create(path.as_str()).unwrap());
+
     if program.noreply {
         for i in 0..repeat {
             let params = if program.sequencer {
@@ -95,15 +101,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             };
 
             match client.rpc_request_inject(method.as_str(), params.clone()).await {
-                Ok(()) => { },
+                Ok(id) => {
+                    completed += 1;
+
+                    if let Some(ref mut log) = &mut receipt_log {
+                        log.write_all(format!("{}\n", id).as_bytes()).unwrap();
+                    }
+
+                    log::debug!("Sent {}/{}", completed, repeat);
+                },
                 Err(err) => {
                     log::error!("Error with request: {}", err);
                 }
             }
-
-            completed += 1;
-
-            log::debug!("confirmations {}/{}", completed, repeat);
 
             sleep(program.repeat_delay).await;
         }
@@ -122,15 +132,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     if !program.silent {
                         println!("{}", response.to_string());
                     }
+
+                    completed += 1;
+
+                    log::debug!("Sent {}/{}", completed, repeat);
                 },
                 Err(err) => {
                     log::error!("Error sending request: {}", err);
                 }
             }
-
-            completed += 1;
-
-            log::debug!("Sent {}/{}", completed, repeat);
 
             sleep(program.repeat_delay).await;
         }
