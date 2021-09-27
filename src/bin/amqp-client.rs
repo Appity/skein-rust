@@ -148,7 +148,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         log::info!("Completed {} request(s) in {:.2}s ({:.1}RPS)", completed, elapsed, completed as f64/elapsed);
     }
 
-    log::info!("Client report: sent={}, resent={}, pending={}", report.sent, report.resent, report.pending);
+    log::info!(
+        "Client report: connections={}, sent={}, retried={}, pending={}",
+        report.connections,
+        report.sent,
+        report.retried,
+        report.pending
+    );
 
     Ok(())
 }
