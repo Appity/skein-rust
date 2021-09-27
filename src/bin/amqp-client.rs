@@ -31,11 +31,13 @@ struct Program {
     report: bool,
     #[clap(short,long,default_value="1")]
     repeat: usize,
+    #[clap(long)]
+    sequencer: bool,
     #[clap(short,long,default_value="0",parse(try_from_str=Self::try_into_duration))]
     repeat_delay: Duration,
     #[clap(long)]
     ident: Option<String>,
-    #[clap(short,long,default_value="10",parse(try_from_str=Self::try_into_duration))]
+    #[clap(short,long,default_value="30",parse(try_from_str=Self::try_into_duration))]
     timeout : Duration,
     #[clap(long)]
     noreply : bool,
@@ -84,7 +86,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut completed = 0;
 
     if program.noreply {
-        for _ in 0..repeat {
+        for i in 0..repeat {
+            let params = if program.sequencer {
+                Some(json!(i + 1))
+            }
+            else {
+                params.clone()
+            };
+
             match client.rpc_request_inject(method.as_str(), params.clone()).await {
                 Ok(()) => { },
                 Err(err) => {
@@ -100,7 +109,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     else {
-        for _ in 0..repeat {
+        for i in 0..repeat {
+            let params = if program.sequencer {
+                Some(json!(i + 1))
+            }
+            else {
+                params.clone()
+            };
+
             match client.rpc_request(method.as_str(), params.clone()).await {
                 Ok(response) => {
                     if !program.silent {
