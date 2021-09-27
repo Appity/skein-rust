@@ -163,7 +163,9 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                             return Err(err);
                                         }
 
-                                        log::trace!("Delivery published to {}", &rpc_queue_name);
+                                        loop_context.sent += 1;
+
+                                        log::trace!("Delivery {} published to {}", &loop_context.sent, &rpc_queue_name);
 
                                         loop_context.requests.insert(request.id().clone(), reply);
                                     },
@@ -181,7 +183,9 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                             }
                         }
                     },
-                    Some(ClientCommand::Inject(request)) => {
+                    Some(ClientCommand::Inject(request,response)) => {
+                        log::trace!("{}> Request injection", request.id());
+
                         match serde_json::to_string(&request) {
                             Ok(str) => {
                                 match channel.basic_publish(
@@ -193,19 +197,27 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                 ).await {
                                     Ok(confirm) => {
                                         if let Err(err) = confirm.await {
-                                            if let Err(err) = loop_context.tx.send(ClientCommand::Inject(request)) {
+                                            if let Err(err) = loop_context.tx.send(ClientCommand::Inject(request,response)) {
                                                 log::error!("Error requeueing message: {}", err);
                                             }
 
                                             return Err(err);
                                         }
 
-                                        log::trace!("Delivery published to {}", &rpc_queue_name);
+                                        loop_context.sent += 1;
+
+                                        log::trace!("{}> Delivery {} published to {}", request.id(), &loop_context.sent, &rpc_queue_name);
+
+                                        if let Err(_) = response.send(()) {
+                                            // Sender may have gone away, so consider demoting this to trace.
+                                            log::error!("{}> Error confirming delivery", request.id());
+                                        }
                                     },
                                     Err(err) => {
-                                        if let Err(err) = loop_context.tx.send(ClientCommand::Inject(request)) {
+                                        if let Err(err) = loop_context.tx.send(ClientCommand::Inject(request,response)) {
                                             log::error!("Error requeueing message: {}", err);
                                         }
+                                        log::info!("RQ");
 
                                         return Err(err);
                                     }
@@ -281,6 +293,7 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
 struct ClientLoopContext {
     ident: String,
     options: ClientOptions,
+    sent: usize,
     tx: UnboundedSender<ClientCommand>,
     rx: UnboundedReceiver<ClientCommand>,
     requests: HashMap::<String,OneshotSender<rpc::Response>>
@@ -320,7 +333,7 @@ async fn connect(options: &ClientOptions) -> LapinResult<Connection> {
 #[derive(Debug)]
 enum ClientCommand {
     Request(rpc::Request,OneshotSender<rpc::Response>),
-    Inject(rpc::Request),
+    Inject(rpc::Request,OneshotSender<()>),
     Terminate
 }
 
@@ -345,6 +358,7 @@ impl Client {
         let loop_context = ClientLoopContext {
             ident,
             options: options.clone(),
+            sent: 0,
             tx: tx.clone(),
             rx,
             requests: HashMap::new()
@@ -421,7 +435,11 @@ impl ClientTrait for Client {
 
         log::trace!("{}> RPC Request: {} (sent)", request.id(), &method);
 
-        self.rpc.send(ClientCommand::Inject(request))?;
+        let (reply, responder) = oneshot_channel::<()>();
+
+        self.rpc.send(ClientCommand::Inject(request,reply))?;
+
+        responder.await?;
 
         Ok(())
     }
