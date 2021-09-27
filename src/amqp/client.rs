@@ -312,6 +312,17 @@ struct ClientLoopContext {
     requests: HashMap::<String,OneshotSender<rpc::Response>>
 }
 
+impl ClientLoopContext {
+    fn report(&self) -> ClientReport {
+        ClientReport {
+            connections: self.connections,
+            sent: self.sent,
+            retried: self.retried,
+            pending: self.requests.len()
+        }
+    }
+}
+
 #[derive(Clone,Debug)]
 pub struct ClientReport {
     pub connections: usize,
@@ -344,12 +355,7 @@ async fn client_handle(mut loop_context: ClientLoopContext) -> LapinResult<JoinH
             sleep(Duration::from_secs(1)).await;
         }
 
-        ClientReport {
-            connections: loop_context.connections,
-            sent: loop_context.sent,
-            retried: loop_context.retried,
-            pending: loop_context.requests.len()
-        }
+        loop_context.report()
     }))
 }
 
