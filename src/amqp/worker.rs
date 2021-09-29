@@ -218,7 +218,7 @@ impl<C> Worker<C> where C : Responder {
             }
         }
         else {
-            log::debug!("No reply-to header for request");
+            log::trace!("No reply-to header for request");
         }
     }
 
