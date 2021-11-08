@@ -625,8 +625,7 @@ impl fmt::Display for ErrorResponse {
     }
 }
 
-impl serde::ser::StdError for ErrorResponse {
-}
+impl std::error::Error for ErrorResponse { }
 
 #[cfg(test)]
 mod test {
