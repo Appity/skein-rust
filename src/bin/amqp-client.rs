@@ -6,7 +6,7 @@ use std::num::ParseFloatError;
 use std::time::Duration;
 use std::time::Instant;
 
-use clap::Clap;
+use clap::Parser;
 use dotenv::dotenv;
 use serde_json::json;
 use tokio::time::sleep;
@@ -16,7 +16,7 @@ use skein_rpc::amqp::Client as AMQPClient;
 use skein_rpc::amqp::ClientOptions as AMQPClientOptions;
 use skein_rpc::logging;
 
-#[derive(Clap)]
+#[derive(Parser)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Program {
     #[clap(short, long, parse(from_occurrences))]

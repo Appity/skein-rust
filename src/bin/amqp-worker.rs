@@ -5,7 +5,7 @@ use std::io::Write;
 use std::num::ParseIntError;
 
 use async_trait::async_trait;
-use clap::Clap;
+use clap::Parser;
 use dotenv::dotenv;
 use serde_json::json;
 use serde_json::Value;
@@ -17,10 +17,10 @@ use skein_rpc::logging;
 use skein_rpc::Responder;
 use skein_rpc::rpc;
 
-#[derive(Clap)]
+#[derive(Parser)]
 #[clap(version = env!("CARGO_PKG_VERSION"))]
 struct Program {
-    #[clap(short, long, parse(from_occurrences))]
+    #[clap(short,long,parse(from_occurrences))]
     verbose: usize,
     #[clap(long)]
     receipt_log : Option<String>,

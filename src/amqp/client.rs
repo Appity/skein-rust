@@ -17,7 +17,6 @@ use lapin::{
     Result as LapinResult
 };
 use serde_json::Value;
-use tokio_amqp::LapinTokioExt;
 use tokio::sync::mpsc::{unbounded_channel,UnboundedReceiver,UnboundedSender};
 use tokio::sync::oneshot::{channel as oneshot_channel,Sender as OneshotSender};
 use tokio::task::JoinHandle;
@@ -194,7 +193,7 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                     "", // FUTURE: Allow specifying exchange
                                     rpc_queue_name.as_str(),
                                     Default::default(),
-                                    str.as_bytes().to_vec(),
+                                    str.as_bytes(),
                                     request.properties(reply_to.as_str())
                                 ).await {
                                     Ok(confirm) => {
@@ -228,7 +227,7 @@ async fn client_consumer_loop(channel: Channel, mut consumer: Consumer, loop_con
                                     "", // FUTURE: Allow specifying exchange
                                     rpc_queue_name.as_str(),
                                     Default::default(),
-                                    str.as_bytes().to_vec(),
+                                    str.as_bytes(),
                                     request.properties("")
                                 ).await {
                                     Ok(confirm) => {
@@ -378,7 +377,7 @@ async fn client_handle(mut loop_context: ClientLoopContext) -> LapinResult<JoinH
 async fn connect(options: &ClientOptions) -> LapinResult<Connection> {
     Connection::connect(
         options.amqp_url.as_str(),
-        ConnectionProperties::default().with_tokio(),
+        ConnectionProperties::default(),
     ).await
 }
 

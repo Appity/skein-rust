@@ -198,7 +198,7 @@ impl<C> Worker<C> where C : Responder {
             if !reply_to.is_empty() {
                 match serde_json::to_string(response) {
                     Ok(str) => {
-                        let payload = str.as_bytes().to_vec();
+                        let payload = str.as_bytes();
 
                         // FIX: Warn on transmission error
                         if let Err(err) = channel.basic_publish(
