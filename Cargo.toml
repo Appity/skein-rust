@@ -27,7 +27,8 @@ simple_logger = { version = "*" }
 tokio = { version = "1.10.1", features = [ "full" ] }
 tokio-amqp = { version = "2.0.0" }
 time = "*"
-uuid = { version = "*", features = [ "serde", "v4" ] }
+# diesel requires uuid 0.8.2 specifically
+uuid = { version = "0.8.2", features = [ "serde", "v4" ] }
 url = "2.2.2"
 
 [[bin]]
