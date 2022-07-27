@@ -13,3 +13,5 @@ pub mod rpc;
 
 mod responder;
 pub use responder::Responder;
+
+pub type AsyncResult<T,E=Box<dyn std::error::Error + Sync + Send>> = std::result::Result<T, E>;

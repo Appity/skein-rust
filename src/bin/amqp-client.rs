@@ -1,5 +1,4 @@
 use std::env;
-use std::error::Error;
 use std::fs::File;
 use std::io::Write;
 use std::num::ParseFloatError;
@@ -11,6 +10,7 @@ use dotenv::dotenv;
 use serde_json::json;
 use tokio::time::sleep;
 
+use skein_rpc::AsyncResult;
 use skein_rpc::Client;
 use skein_rpc::amqp::Client as AMQPClient;
 use skein_rpc::amqp::ClientOptions as AMQPClientOptions;
@@ -57,7 +57,7 @@ impl Program {
 }
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> AsyncResult<()> {
     let program = Program::parse();
 
     match program.env_file {

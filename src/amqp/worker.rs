@@ -251,6 +251,8 @@ mod test {
     use serde_json::json;
     use serde_json::Value;
 
+    use crate::AsyncResult;
+
     use super::*;
 
     struct ContextExample {
@@ -260,7 +262,7 @@ mod test {
 
     #[async_trait]
     impl Responder for ContextExample {
-        async fn respond(&mut self, _request: &rpc::Request) -> Result<Value,Box<dyn std::error::Error>> {
+        async fn respond(&mut self, _request: &rpc::Request) -> AsyncResult<Value> {
             self.terminated = true;
 
             Ok(json!(format!("Example {}", &self.id)))

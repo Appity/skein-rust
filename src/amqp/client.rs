@@ -24,6 +24,7 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use uuid::Uuid;
 
+use crate::AsyncResult;
 use crate::rpc;
 use crate::Client as ClientTrait;
 
@@ -444,7 +445,7 @@ impl Client {
 
 #[async_trait]
 impl ClientTrait for Client {
-    async fn rpc_request_serialize<T>(&self, method: impl ToString + Send + 'async_trait, params: Option<impl Into<Value> + Send + 'async_trait>) -> Result<T, Box<dyn std::error::Error>> where T : From<Value> + Send + 'async_trait {
+    async fn rpc_request_serialize<T>(&self, method: impl ToString + Send + 'async_trait, params: Option<impl Into<Value> + Send + 'async_trait>) -> AsyncResult<T> where T : From<Value> + Send + 'async_trait {
         let (reply, responder) = oneshot_channel::<rpc::Response>();
         let method = method.to_string();
 
@@ -464,7 +465,7 @@ impl ClientTrait for Client {
         }
     }
 
-    async fn rpc_request(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> Result<Value, Box<dyn std::error::Error>> {
+    async fn rpc_request(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> AsyncResult<Value> {
         let (reply, responder) = oneshot_channel::<rpc::Response>();
         let method = method.to_string();
 
@@ -484,7 +485,7 @@ impl ClientTrait for Client {
         }
     }
 
-    async fn rpc_request_inject(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> Result<String, Box<dyn std::error::Error>> {
+    async fn rpc_request_inject(&self, method: impl ToString + Send + 'async_trait, params: Option<Value>) -> AsyncResult<String> {
         let method = method.to_string();
 
         let request = rpc::Request::new_noreply(Uuid::new_v4().to_string(), &method, params);

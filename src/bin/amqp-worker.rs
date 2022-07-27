@@ -1,5 +1,4 @@
 use std::env;
-use std::error::Error;
 use std::fs::File;
 use std::io::Write;
 use std::num::ParseIntError;
@@ -12,6 +11,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tokio::time::Duration;
 
+use skein_rpc::AsyncResult;
 use skein_rpc::amqp::Worker;
 use skein_rpc::logging;
 use skein_rpc::Responder;
@@ -58,7 +58,7 @@ impl WorkerContext {
 
 #[async_trait]
 impl Responder for WorkerContext {
-    async fn respond(&mut self, request: &rpc::Request) -> Result<Value,Box<dyn Error>> {
+    async fn respond(&mut self, request: &rpc::Request) -> AsyncResult<Value> {
         if let Some(ref mut log) = &mut self.receipt_log {
             log.write_all(format!("{}\n", request.id()).as_bytes()).unwrap();
         }
@@ -82,7 +82,7 @@ impl Responder for WorkerContext {
 }
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> AsyncResult<()> {
     let program = Program::parse();
 
     match program.env_file {
