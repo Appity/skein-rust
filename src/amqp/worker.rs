@@ -227,6 +227,8 @@ impl<C> Worker<C> where C : Responder {
             Ok(request) => {
                 log::trace!("Request received: {}", request.id());
 
+                let request = self.context.prepare_request(request);
+
                 match self.context.respond(&request).await {
                     Ok(result) => {
                         rpc::Response::result_for(&request, result)
