@@ -71,6 +71,23 @@ impl Request {
             properties
         }
     }
+
+    pub fn shed_single_outer_array(mut self) -> Self {
+        if let Some(value) = &mut self.params {
+            if let Some(array) = value.as_array_mut() {
+                if array.len() == 1 {
+                    return Self {
+                        id: self.id,
+                        method: self.method,
+                        params: array.pop(),
+                        reply_to: self.reply_to
+                    };
+                }
+            }
+        }
+
+        self
+    }
 }
 
 impl Display for Request {
@@ -631,6 +648,8 @@ impl std::error::Error for ErrorResponse { }
 mod test {
     use super::*;
 
+    use serde_json::json;
+
     #[test]
     fn test_request_new() {
         let request = Request::new("0ff0", "echo", None);
@@ -730,5 +749,64 @@ mod test {
         assert_eq!(error.code, -32000);
         assert_eq!(error.message, "Test message");
         assert_eq!(error.data, None);
+    }
+
+    #[test]
+    fn shed_outer_array_on_none() {
+        let request = Request {
+            id: "3ad8594c-ee4f-4d70-9f9a-abd853458ca4".into(),
+            method: "example".into(),
+            params: None,
+            reply_to: false
+        };
+
+        let request = request.shed_single_outer_array();
+
+        assert!(request.params.is_none());
+    }
+
+    #[test]
+    fn shed_outer_array_on_string() {
+        let request = Request {
+            id: "3ad8594c-ee4f-4d70-9f9a-abd853458ca4".into(),
+            method: "example".into(),
+            params: Some(json!("test")),
+            reply_to: false
+        };
+
+        let request = request.shed_single_outer_array();
+
+        assert!(request.params.is_some());
+        assert!(request.params.unwrap().is_string());
+    }
+
+    #[test]
+    fn shed_outer_array_on_wrapped_string() {
+        let request = Request {
+            id: "3ad8594c-ee4f-4d70-9f9a-abd853458ca4".into(),
+            method: "example".into(),
+            params: Some(json!([ "test" ])),
+            reply_to: false
+        };
+
+        let request = request.shed_single_outer_array();
+
+        assert!(request.params.is_some());
+        assert!(request.params.unwrap().is_string());
+    }
+
+    #[test]
+    fn shed_outer_array_on_array() {
+        let request = Request {
+            id: "3ad8594c-ee4f-4d70-9f9a-abd853458ca4".into(),
+            method: "example".into(),
+            params: Some(json!([ [ "test" ] ])),
+            reply_to: false
+        };
+
+        let request = request.shed_single_outer_array();
+
+        assert!(request.params.is_some());
+        assert!(request.params.unwrap().is_array());
     }
 }
