@@ -8,7 +8,7 @@ edition = "2021"
 
 [dependencies]
 async-trait = "*"
-amq-protocol = { version = "7.0.1" }
+amq-protocol = { version = "8.1.2" }
 clap = { version = "3.2.5", features = [ "derive" ] }
 chrono = { version = "*", features = [ "serde" ] }
 dotenv = "0.15.0"
